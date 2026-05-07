@@ -104,7 +104,15 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
             thread::spawn(move || {
                 while let Ok(line) = line_rx.recv() {
                     let _ = ui_tx_fanout.send(UiMsg::NewLine(line.clone()));
-                    let _ = trans_in_tx.send(line);
+                    // try_send, not send: a slow translator must NOT exert
+                    // backpressure on the transcribe → VAD → audio pipeline.
+                    // If the translator queue is full we drop the translation
+                    // and keep the source text flowing.
+                    if let Err(crossbeam_channel::TrySendError::Full(_)) =
+                        trans_in_tx.try_send(line)
+                    {
+                        tracing::warn!("translator queue full — dropping line for translation");
+                    }
                 }
             });
             translate::spawn(
