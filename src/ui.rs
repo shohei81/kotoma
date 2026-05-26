@@ -104,11 +104,11 @@ pub fn draw(f: &mut Frame, state: &UiState) {
     };
     let help = match state.saved_note {
         Some(note) => format!(
-            " {} · q quit&save · s save · l lang · d device · space pause ·{}",
+            " {} · q quit&save · s save · l lang · d device · m sys-audio · space pause ·{}",
             note, nav
         ),
         None => format!(
-            " q quit&save · s save · l cycle lang · d device · space pause ·{}",
+            " q quit&save · s save · l lang · d device · m sys-audio · space pause ·{}",
             nav
         ),
     };
@@ -121,30 +121,69 @@ pub fn draw(f: &mut Frame, state: &UiState) {
 }
 
 fn render_device_picker(f: &mut Frame, pk: &DevicePicker) {
-    let area = centered_rect(60, 60, f.area());
+    let area = centered_rect(70, 70, f.area());
     f.render_widget(Clear, area);
-    let items: Vec<ListItem> = pk
-        .devices
+
+    let outer = Block::default().borders(Borders::ALL).title(
+        " Audio sources  (↑↓ select · tab switch · enter apply · esc cancel) ",
+    );
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    render_picker_column(f, cols[0], "Microphone", &pk.mic, pk.mic_sel, pk.focus == 0);
+    render_picker_column(f, cols[1], "System audio", &pk.sys, pk.sys_sel, pk.focus == 1);
+}
+
+fn render_picker_column(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    devices: &[String],
+    selected: usize,
+    focused: bool,
+) {
+    let items: Vec<ListItem> = devices
         .iter()
         .enumerate()
         .map(|(i, d)| {
-            let marker = if i == pk.selected { "▶ " } else { "  " };
+            let is_sel = i == selected;
+            let marker = if is_sel && focused {
+                "▶ "
+            } else if is_sel {
+                "● "
+            } else {
+                "  "
+            };
             let label = match d.strip_prefix(crate::audio::LOOPBACK_PREFIX) {
                 Some(name) => format!("[loopback] {}", name),
                 None => d.clone(),
             };
-            let style = if i == pk.selected {
+            let style = if is_sel && focused {
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else if is_sel {
+                Style::default().fg(Color::Green)
             } else {
                 Style::default()
             };
             ListItem::new(Span::styled(format!("{}{}", marker, label), style))
         })
         .collect();
+
+    let border_style = if focused {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Select audio source  (↑↓ · enter · esc) "),
+            .border_style(border_style)
+            .title(format!(" {} ", title)),
     );
     f.render_widget(list, area);
 }

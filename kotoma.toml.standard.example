@@ -12,6 +12,15 @@ language = "en"
 # "default" or a specific device name from `cpal` enumeration.
 input_device = "default"
 
+# Optional: mix system audio alongside the mic.
+#   "auto"  — auto-detect per OS (WASAPI loopback on Windows, BlackHole-like
+#             virtual driver on macOS, `*.monitor` source on Linux).
+#   explicit device name — e.g. `loopback:Speakers (Realtek)` on Windows,
+#                          `BlackHole 2ch` on macOS,
+#                          `alsa_output.xxx.monitor` on Linux.
+# Leave unset (or press `m` in the TUI) to capture mic only.
+# system_audio_device = "auto"
+
 # Whisper decoding threads.
 threads = 4
 

@@ -27,8 +27,12 @@ use std::time::Duration;
 use tracing::info;
 
 pub struct DevicePicker {
-    pub devices: Vec<String>,
-    pub selected: usize,
+    pub mic: Vec<String>,
+    pub sys: Vec<String>,
+    pub mic_sel: usize,
+    pub sys_sel: usize,
+    /// 0 = mic section, 1 = system-audio section.
+    pub focus: u8,
 }
 
 pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
@@ -41,7 +45,16 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
 
     let language = Arc::new(RwLock::new(cfg.language.clone()));
 
-    let mut capture = AudioCapture::start(&cfg.input_device, audio_tx.clone())?;
+    let mut capture = AudioCapture::start_dual(
+        &cfg.input_device,
+        cfg.system_audio_device.as_deref(),
+        audio_tx.clone(),
+    )?;
+    let mut mic_device = cfg.input_device.clone();
+    let mut sys_device = cfg
+        .system_audio_device
+        .clone()
+        .unwrap_or_else(|| "(none)".to_string());
     let model_name = cfg
         .model_path
         .file_name()
@@ -147,6 +160,8 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
         draft_rx,
         translator_status_init,
         existing_content.as_deref(),
+        &mut mic_device,
+        &mut sys_device,
     );
     restore_terminal(&mut terminal)?;
     drop(capture);
@@ -166,6 +181,8 @@ fn run_loop(
     draft_rx: Receiver<DraftState>,
     initial_translator_status: TranslatorStatus,
     existing_content: Option<&str>,
+    mic_device: &mut String,
+    sys_device: &mut String,
 ) -> Result<()> {
     let mut lines: Vec<TranscriptLine> = Vec::new();
     let mut level = 0.0f32;
@@ -241,29 +258,59 @@ fn run_loop(
             {
                 if let Some(pk) = picker.as_mut() {
                     match code {
-                        KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
+                        KeyCode::Esc | KeyCode::Char('q') => {
                             picker = None;
                         }
+                        KeyCode::Tab | KeyCode::Right | KeyCode::Left => {
+                            pk.focus ^= 1;
+                        }
                         KeyCode::Up => {
-                            if pk.selected > 0 {
-                                pk.selected -= 1;
+                            let sel = if pk.focus == 0 { &mut pk.mic_sel } else { &mut pk.sys_sel };
+                            if *sel > 0 {
+                                *sel -= 1;
                             }
                         }
                         KeyCode::Down => {
-                            if pk.selected + 1 < pk.devices.len() {
-                                pk.selected += 1;
+                            let (sel, len) = if pk.focus == 0 {
+                                (&mut pk.mic_sel, pk.mic.len())
+                            } else {
+                                (&mut pk.sys_sel, pk.sys.len())
+                            };
+                            if *sel + 1 < len {
+                                *sel += 1;
                             }
                         }
                         KeyCode::Enter => {
-                            let choice = pk.devices[pk.selected].clone();
-                            match AudioCapture::start(&choice, audio_tx.clone()) {
+                            let mic_choice = pk.mic[pk.mic_sel].clone();
+                            let sys_choice = pk.sys[pk.sys_sel].clone();
+                            let sys_arg = if sys_choice == "(none)" {
+                                None
+                            } else {
+                                Some(sys_choice.as_str())
+                            };
+                            match AudioCapture::start_dual(
+                                &mic_choice,
+                                sys_arg,
+                                audio_tx.clone(),
+                            ) {
                                 Ok(new_cap) => {
                                     input_name = new_cap.input_name.clone();
                                     *capture = new_cap;
-                                    info!(device = %input_name, "switched input device");
+                                    *mic_device = mic_choice.clone();
+                                    *sys_device = sys_choice.clone();
+                                    info!(
+                                        mic = %mic_choice,
+                                        sys = %sys_choice,
+                                        "switched input devices"
+                                    );
                                 }
                                 Err(e) => {
-                                    tracing::error!(device = %choice, error = %e, "device switch failed");
+                                    tracing::error!(
+                                        mic = %mic_choice,
+                                        sys = %sys_choice,
+                                        error = %e,
+                                        "device switch failed"
+                                    );
                                 }
                             }
                             picker = None;
@@ -297,12 +344,52 @@ fn run_loop(
                             info!(paused = now_paused, "toggle recording");
                         }
                         (KeyCode::Char('d'), _) => {
-                            let devices = crate::audio::list_input_devices();
-                            let selected = devices
+                            let (mic, sys) = crate::audio::list_devices_split();
+                            let mic_sel = mic
                                 .iter()
-                                .position(|d| d == &input_name)
+                                .position(|d| d == &*mic_device)
                                 .unwrap_or(0);
-                            picker = Some(DevicePicker { devices, selected });
+                            let sys_sel = sys
+                                .iter()
+                                .position(|d| d == &*sys_device)
+                                .unwrap_or_else(|| sys.iter().position(|d| d == "(auto)").unwrap_or(0));
+                            picker = Some(DevicePicker {
+                                mic,
+                                sys,
+                                mic_sel,
+                                sys_sel,
+                                focus: 0,
+                            });
+                        }
+                        (KeyCode::Char('m'), _) => {
+                            // Quick toggle: mic only ↔ mic + auto-detected system audio.
+                            let next_sys = if sys_device.as_str() == "(none)" {
+                                "(auto)".to_string()
+                            } else {
+                                "(none)".to_string()
+                            };
+                            let sys_arg = if next_sys == "(none)" {
+                                None
+                            } else {
+                                Some(next_sys.as_str())
+                            };
+                            match AudioCapture::start_dual(
+                                mic_device.as_str(),
+                                sys_arg,
+                                audio_tx.clone(),
+                            ) {
+                                Ok(new_cap) => {
+                                    input_name = new_cap.input_name.clone();
+                                    *capture = new_cap;
+                                    *sys_device = next_sys.clone();
+                                    saved_note = Some(format!("system audio: {}", input_name));
+                                    info!(sys = %next_sys, "toggled system audio");
+                                }
+                                Err(e) => {
+                                    saved_note = Some(format!("system audio: {}", e));
+                                    tracing::error!(error = %e, "system audio toggle failed");
+                                }
+                            }
                         }
                         (KeyCode::Up, _) => {
                             scroll_up = scroll_up.saturating_add(1).min(scroll_max_cell.get());

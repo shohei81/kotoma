@@ -129,7 +129,9 @@ cargo run --release -- notes.md
 | `s`           | Save transcript now             |
 | `l`           | Cycle Whisper language (en → ja → auto) |
 | `space`       | Pause / resume UI               |
-| `d`           | Switch audio source (mic or system-audio loopback) |
+| `m`           | Toggle system-audio mix (auto-detected) on / off       |
+| `d`           | Pick mic + system-audio source (mix both, or either alone) |
+| `Tab`         | (in picker) switch between mic and system-audio columns |
 | `↑` / `↓`     | Scroll transcript up / down one line |
 | `PgUp` / `PgDn` | Scroll by half a page          |
 | `Home` / `End` | Jump to oldest line / resume live tail |
@@ -152,13 +154,30 @@ The opposite column shows the Qwen-translated version (or `…` while pending).
 
 ### Audio sources
 
-Press `d` to pick from available audio sources. The picker lists:
+**Quick toggle:** press `m` to enable system-audio mixing using OS-appropriate
+auto-detection (WASAPI loopback on Windows, BlackHole-style virtual driver on
+macOS, `*.monitor` source on Linux/PulseAudio). Press `m` again to turn it
+off. If auto-detection fails (e.g. no virtual driver installed on macOS),
+the status line shows an actionable error.
 
-- **Input devices** — microphones and line-in.
-- **`[loopback] …` entries** — output devices captured as system audio
-  (meetings, browser audio, music, etc.).
+**Manual override:** press `d` to open a two-column picker — **Microphone**
+on the left, **System audio** on the right. `↑/↓` chooses within a column,
+`Tab` switches columns, `Enter` applies. `(auto)` in the system-audio column
+runs the same detection as `m`; `(none)` disables that slot.
 
-Platform support for loopback:
+When both slots are set, the streams are mixed sample-by-sample at 16 kHz
+mono before transcription, so your voice and the meeting/browser audio land
+in the same transcript. The mic drives the cadence; if the system-audio
+source goes silent, the mix degrades to mic-only automatically.
+
+Persistent config in `kotoma.toml`:
+
+```toml
+input_device = "default"
+system_audio_device = "auto"     # or an explicit device name, see examples
+```
+
+Platform support for system-audio capture:
 
 - **Windows** — natively supported via WASAPI. Pick `[loopback] Speakers`
   (or similar) and system audio is captured directly.

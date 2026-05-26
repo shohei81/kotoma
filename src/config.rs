@@ -11,6 +11,11 @@ pub struct Config {
     pub language: String,
     #[serde(default = "default_device")]
     pub input_device: String,
+    /// Optional second source mixed sample-by-sample into the input stream.
+    /// Typically a `loopback:<output device>` entry to capture system audio
+    /// alongside the mic. `None` or an empty string disables.
+    #[serde(default)]
+    pub system_audio_device: Option<String>,
     #[serde(default = "default_threads")]
     pub threads: i32,
     #[serde(default)]
