@@ -13,8 +13,8 @@ print_usage() {
     cat <<EOF >&2
 usage: install.sh {standard|high} [--reset-config]
 
-  standard         Whisper small + Qwen2.5-7B   (~5 GB disk, ~7 GB RAM)
-  high             Whisper large-v3-turbo + Qwen2.5-14B   (~10 GB disk, ~11 GB RAM)
+  standard         Whisper small + Gemma 3 4B   (~3 GB disk, ~4 GB RAM)
+  high             Whisper large-v3-turbo + Gemma 3 12B   (~9 GB disk, ~10 GB RAM)
   --reset-config   Overwrite ~/.config/kotoma/kotoma.toml with the tier default
 
 Remote install / update:
@@ -78,16 +78,16 @@ if [[ "$TIER" == "standard" ]]; then
     echo "==> Fetching standard-tier models"
     fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
           "$MODEL_DIR/ggml-small.bin"
-    fetch "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf" \
-          "$MODEL_DIR/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+    fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
+          "$MODEL_DIR/gemma-3-4b-it-Q4_K_M.gguf"
     echo "==> Config"
     write_config "kotoma.toml.standard.example"
 else
     echo "==> Fetching high-tier models"
     fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" \
           "$MODEL_DIR/ggml-large-v3-turbo.bin"
-    fetch "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf" \
-          "$MODEL_DIR/Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+    fetch "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf" \
+          "$MODEL_DIR/gemma-3-12b-it-Q4_K_M.gguf"
     echo "==> Config"
     write_config "kotoma.toml.high.example"
 fi

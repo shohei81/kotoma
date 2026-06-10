@@ -5,6 +5,66 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 use std::cell::Cell;
 
+/// Per-column cache of wrapped row counts, so a frame only re-wraps lines
+/// that are new (or whose translation just arrived) instead of the whole
+/// transcript. Without this, rendering cost grows with session length and
+/// long sessions freeze during scroll.
+pub struct ColumnCache {
+    width: u16,
+    rows: Vec<u16>,
+}
+
+impl ColumnCache {
+    fn new() -> Self {
+        Self {
+            width: 0,
+            rows: Vec::new(),
+        }
+    }
+
+    fn invalidate_from(&mut self, idx: usize) {
+        self.rows.truncate(idx);
+    }
+
+    fn sync(&mut self, lines: &[TranscriptLine], col_lang: &str, width: u16) {
+        if width != self.width {
+            self.width = width;
+            self.rows.clear();
+        }
+        if width == 0 {
+            self.rows.clear();
+            return;
+        }
+        while self.rows.len() < lines.len() {
+            let i = self.rows.len();
+            let para = Paragraph::new(vec![render_line(&lines[i], col_lang)])
+                .wrap(Wrap { trim: false });
+            self.rows
+                .push(para.line_count(width).min(u16::MAX as usize) as u16);
+        }
+    }
+}
+
+pub struct TranscriptLayout {
+    en: ColumnCache,
+    ja: ColumnCache,
+}
+
+impl TranscriptLayout {
+    pub fn new() -> Self {
+        Self {
+            en: ColumnCache::new(),
+            ja: ColumnCache::new(),
+        }
+    }
+
+    /// Call when an existing line changed (e.g. its translation arrived).
+    pub fn invalidate_line(&mut self, idx: usize) {
+        self.en.invalidate_from(idx);
+        self.ja.invalidate_from(idx);
+    }
+}
+
 pub struct UiState<'a> {
     pub lines: &'a [TranscriptLine],
     pub level: f32,
@@ -23,7 +83,7 @@ pub struct UiState<'a> {
     pub scroll_max: &'a Cell<u16>,
 }
 
-pub fn draw(f: &mut Frame, state: &UiState) {
+pub fn draw(f: &mut Frame, state: &UiState, layout: &mut TranscriptLayout) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -86,6 +146,7 @@ pub fn draw(f: &mut Frame, state: &UiState) {
         " English ",
         state.scroll_up,
         state.scroll_max,
+        &mut layout.en,
     );
     render_transcript_column(
         f,
@@ -95,6 +156,7 @@ pub fn draw(f: &mut Frame, state: &UiState) {
         " 日本語 ",
         state.scroll_up,
         state.scroll_max,
+        &mut layout.ja,
     );
 
     let nav = if state.scroll_up == 0 {
@@ -215,20 +277,49 @@ fn render_transcript_column(
     title: &str,
     scroll_up: u16,
     scroll_max: &Cell<u16>,
+    cache: &mut ColumnCache,
 ) {
     let block = Block::default().borders(Borders::ALL).title(title.to_string());
     let inner = block.inner(area);
-    let wrapped: Vec<Line> = lines.iter().map(|l| render_line(l, col_lang)).collect();
+    cache.sync(lines, col_lang, inner.width);
 
-    let para = Paragraph::new(wrapped).wrap(Wrap { trim: false });
-    let total = para.line_count(inner.width) as u16;
-    let tail = total.saturating_sub(inner.height);
-    let col_max = tail;
+    let total: u32 = cache.rows.iter().map(|&r| r as u32).sum();
+    let height = inner.height as u32;
+    let tail = total.saturating_sub(height);
+    let col_max = tail.min(u16::MAX as u32) as u16;
     if col_max > scroll_max.get() {
         scroll_max.set(col_max);
     }
-    let scroll = tail.saturating_sub(scroll_up.min(col_max));
-    let para = para.scroll((scroll, 0)).block(block);
+    let top = tail.saturating_sub(scroll_up.min(col_max) as u32);
+
+    // First visible line and the row offset inside it.
+    let mut cum = 0u32;
+    let mut start = lines.len();
+    let mut offset = 0u16;
+    for (i, &r) in cache.rows.iter().enumerate() {
+        let next = cum + r as u32;
+        if next > top {
+            start = i;
+            offset = (top - cum) as u16;
+            break;
+        }
+        cum = next;
+    }
+
+    // Only the lines that can appear in the viewport are wrapped and drawn.
+    let mut wrapped: Vec<Line> = Vec::new();
+    let mut covered = 0u32;
+    let mut end = start;
+    while end < lines.len() && covered < height + offset as u32 {
+        wrapped.push(render_line(&lines[end], col_lang));
+        covered += cache.rows[end] as u32;
+        end += 1;
+    }
+
+    let para = Paragraph::new(wrapped)
+        .wrap(Wrap { trim: false })
+        .scroll((offset, 0))
+        .block(block);
     f.render_widget(para, area);
 }
 

@@ -5,7 +5,7 @@ use crate::{
     msg::{DraftState, TranslatorStatus, UiMsg},
     transcribe::{Segment, TranscribeRunner, TranscriptLine},
     translate::{self, TranslatorConfig},
-    ui::{draw, UiState},
+    ui::{draw, TranscriptLayout, UiState},
     vad::VadRunner,
 };
 use anyhow::Result;
@@ -194,14 +194,21 @@ fn run_loop(
     let mut draft = DraftState::default();
     let mut scroll_up: u16 = 0;
     let scroll_max_cell: Cell<u16> = Cell::new(0);
+    let mut layout = TranscriptLayout::new();
+    // Redraw only when something visible changed — a constant 20 fps repaint
+    // of an idle screen wastes CPU and battery.
+    let mut needs_redraw = true;
+    let mut last_gauge_pct = u16::MAX;
 
     loop {
         while let Ok(msg) = ui_rx.try_recv() {
+            needs_redraw = true;
             match msg {
                 UiMsg::NewLine(line) => lines.push(line),
                 UiMsg::TranslationReady { id, translated } => {
-                    if let Some(line) = lines.iter_mut().find(|l| l.id == id) {
-                        line.translated = Some(translated);
+                    if let Some(idx) = lines.iter().position(|l| l.id == id) {
+                        lines[idx].translated = Some(translated);
+                        layout.invalidate_line(idx);
                     }
                 }
                 UiMsg::TranslatorStatus(s) => translator_status = s,
@@ -213,35 +220,46 @@ fn run_loop(
         level_smooth = level_smooth * 0.7 + level * 0.3;
         while let Ok(d) = draft_rx.try_recv() {
             draft = d;
+            needs_redraw = true;
+        }
+        let gauge_pct = (level_smooth * 400.0).clamp(0.0, 100.0) as u16;
+        if gauge_pct != last_gauge_pct {
+            needs_redraw = true;
         }
 
-        let lang = language.read().map(|g| g.clone()).unwrap_or_default();
-        let is_recording = !paused.load(Ordering::Relaxed);
-        terminal.draw(|f| {
-            draw(
-                f,
-                &UiState {
-                    lines: &lines,
-                    level: level_smooth,
-                    language: &lang,
-                    recording: is_recording,
-                    input_name: &input_name,
-                    model_name,
-                    saved_note: saved_note.as_deref(),
-                    translator_status,
-                    picker: picker.as_ref(),
-                    draft,
-                    scroll_up,
-                    scroll_max: &scroll_max_cell,
-                },
-            );
-        })?;
-        // Clamp any key-driven over-scroll to what the columns can actually show.
-        scroll_up = scroll_up.min(scroll_max_cell.get());
+        if needs_redraw {
+            needs_redraw = false;
+            last_gauge_pct = gauge_pct;
+            let lang = language.read().map(|g| g.clone()).unwrap_or_default();
+            let is_recording = !paused.load(Ordering::Relaxed);
+            terminal.draw(|f| {
+                draw(
+                    f,
+                    &UiState {
+                        lines: &lines,
+                        level: level_smooth,
+                        language: &lang,
+                        recording: is_recording,
+                        input_name: &input_name,
+                        model_name,
+                        saved_note: saved_note.as_deref(),
+                        translator_status,
+                        picker: picker.as_ref(),
+                        draft,
+                        scroll_up,
+                        scroll_max: &scroll_max_cell,
+                    },
+                    &mut layout,
+                );
+            })?;
+            // Clamp any key-driven over-scroll to what the columns can actually show.
+            scroll_up = scroll_up.min(scroll_max_cell.get());
+        }
         let page = terminal.size().map(|r| r.height / 2).unwrap_or(5).max(1);
 
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
+            needs_redraw = true;
             if let Event::Mouse(MouseEvent { kind, .. }) = ev {
                 match kind {
                     MouseEventKind::ScrollUp => {

@@ -30,10 +30,10 @@ min_speech_ms = 500
 silence_ms = 900
 max_segment_ms = 15000
 
-# --- Translator (Qwen2.5-7B via llama-server) ---
+# --- Translator (Gemma 3 4B via llama-server) ---
 [translator]
 binary = "llama-server"
-model_path = "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+model_path = "models/gemma-3-4b-it-Q4_K_M.gguf"
 port = 8787
 n_ctx = 4096
 max_new_tokens = 512

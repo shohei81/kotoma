@@ -29,16 +29,15 @@ impl ContextWindow {
         }
     }
 
-    fn render(&self) -> String {
-        if self.pairs.is_empty() {
-            return String::new();
-        }
-        let mut s = String::from("\n\nRecent context (for reference, do NOT re-translate):\n");
-        for (lang, src, dst) in &self.pairs {
-            let arrow = if lang == "ja" { "JA→EN" } else { "EN→JA" };
-            s.push_str(&format!("- [{arrow}] {src} → {dst}\n"));
-        }
-        s
+    /// Prior pairs in the same direction, oldest first, as (src, dst).
+    /// Same-direction only: mixed directions would contradict the system
+    /// prompt and thrash the server's prompt cache.
+    fn history_for(&self, src_lang: &str) -> Vec<(&str, &str)> {
+        self.pairs
+            .iter()
+            .filter(|(lang, _, _)| lang == src_lang)
+            .map(|(_, s, d)| (s.as_str(), d.as_str()))
+            .collect()
     }
 }
 
@@ -81,6 +80,9 @@ impl ServerHandle {
             .arg("999")
             .arg("--threads")
             .arg("4")
+            // Use the model's own chat template so any GGUF (Gemma, Qwen, …)
+            // gets its correct prompt format via /v1/chat/completions.
+            .arg("--jinja")
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_err))
@@ -93,6 +95,12 @@ impl ServerHandle {
             })?;
         info!(pid = child.id(), port = cfg.port, "llama-server spawned");
         Ok(Self { child: Some(child) })
+    }
+}
+
+impl ServerHandle {
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.as_mut().and_then(|c| c.try_wait().ok().flatten())
     }
 }
 
@@ -126,9 +134,9 @@ fn run(
     line_rx: &Receiver<TranscriptLine>,
     ui_tx: &Sender<UiMsg>,
 ) -> Result<()> {
-    let server = ServerHandle::start(cfg)?;
+    let mut server = ServerHandle::start(cfg)?;
 
-    wait_for_health(cfg).context("waiting for llama-server readiness")?;
+    wait_for_health(cfg, &mut server).context("waiting for llama-server readiness")?;
     let _ = ui_tx.send(UiMsg::TranslatorStatus(TranslatorStatus::Ready));
     info!("llama-server ready");
 
@@ -155,11 +163,22 @@ fn run(
     Ok(())
 }
 
-fn wait_for_health(cfg: &TranslatorConfig) -> Result<()> {
+fn wait_for_health(cfg: &TranslatorConfig, server: &mut ServerHandle) -> Result<()> {
     let url = format!("http://127.0.0.1:{}/health", cfg.port);
     let deadline = Instant::now() + Duration::from_secs(cfg.startup_timeout_secs);
     let mut last_err: Option<String> = None;
     while Instant::now() < deadline {
+        // A stale llama-server from a crashed session can hold the port: our
+        // child dies on bind, yet /health answers (from the stale server with
+        // the wrong model). Fail fast instead of "succeeding" against it.
+        if let Some(status) = server.exited() {
+            return Err(anyhow!(
+                "llama-server exited during startup ({status}) — is port {} already in use \
+                 by a stale llama-server? Kill it (`pkill llama-server`) and retry. \
+                 See llama-server.log for details.",
+                cfg.port
+            ));
+        }
         match ureq::get(&url).timeout(Duration::from_secs(2)).call() {
             Ok(resp) if resp.status() == 200 => return Ok(()),
             Ok(resp) => last_err = Some(format!("status {}", resp.status())),
@@ -174,60 +193,132 @@ fn wait_for_health(cfg: &TranslatorConfig) -> Result<()> {
     ))
 }
 
-fn translate_once(
-    cfg: &TranslatorConfig,
-    line: &TranscriptLine,
-    context: &ContextWindow,
-) -> Result<String> {
-    let (src, dst) = if line.src_lang == "ja" {
-        ("Japanese", "English")
-    } else {
-        ("English", "Japanese")
-    };
-
-    let ctx_block = context.render();
-    let lang_guard = if line.src_lang == "ja" {
-        "- The output MUST be written in English only. Never output Japanese, Chinese, or any other language."
-    } else {
-        "- The output MUST be written in Japanese only. Never output Simplified or Traditional Chinese. Use hiragana, katakana, and Japanese-style kanji; do NOT output Chinese-only characters or Pinyin."
-    };
-    let system = format!(
-        "You are a professional simultaneous interpreter translating from {src} to {dst}.\n\
+fn system_prompt(src_lang: &str) -> &'static str {
+    if src_lang == "ja" {
+        "You are a professional simultaneous interpreter translating from Japanese to English.\n\
 Rules:\n\
 - Output ONLY the translation. No explanations, no quotes, no prefixes.\n\
-{lang_guard}\n\
+- The output MUST be written in English only. Never output Japanese, Chinese, or any other language.\n\
 - If the input is a sentence fragment (no period, cut mid-thought), translate it as a fragment. Do NOT pad or complete.\n\
 - Preserve tone: formal stays formal, casual stays casual.\n\
 - Keep proper nouns, technical terms, and numbers exact.\n\
-- Match punctuation style of the target language.{ctx_block}"
-    );
-    let prompt = format!(
-        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        line.text
-    );
+- Match punctuation style of the target language."
+    } else {
+        "You are a professional simultaneous interpreter translating from English to Japanese.\n\
+Rules:\n\
+- Output ONLY the translation. No explanations, no quotes, no prefixes.\n\
+- The output MUST be written in Japanese only. Never output Simplified or Traditional Chinese. Use hiragana, katakana, and Japanese-style kanji; do NOT output Chinese-only characters or Pinyin.\n\
+- If the input is a sentence fragment (no period, cut mid-thought), translate it as a fragment. Do NOT pad or complete.\n\
+- Preserve tone: formal stays formal, casual stays casual.\n\
+- Keep proper nouns, technical terms, and numbers exact.\n\
+- Match punctuation style of the target language."
+    }
+}
 
-    let url = format!("http://127.0.0.1:{}/completion", cfg.port);
+/// Generation cap proportional to the input — short fragments never need the
+/// full budget, and a tight cap stops repetition loops from burning the GPU.
+fn max_tokens_for(text: &str, cap: u32) -> u32 {
+    let n = text.chars().count() as u32;
+    (n * 2 + 16).clamp(48, cap.max(48))
+}
+
+/// Characters that exist only as Simplified Chinese forms — never in Japanese.
+const SIMPLIFIED_ONLY: &[char] = &[
+    '们', '这', '说', '话', '时', '现', '见', '关', '车', '长', '门', '问', '读', '汉', '译',
+    '应', '给', '让', '还', '么', '吗', '呢', '吧', '头', '买', '卖', '为', '发', '样', '边',
+    '过', '别', '帮', '请',
+];
+
+/// Heuristic: a "Japanese" output that is actually Chinese.
+fn looks_like_chinese(target_is_ja: bool, text: &str) -> bool {
+    if !target_is_ja {
+        return false;
+    }
+    if text.chars().any(|c| SIMPLIFIED_ONLY.contains(&c)) {
+        return true;
+    }
+    let has_kana = text
+        .chars()
+        .any(|c| matches!(c as u32, 0x3040..=0x30FF));
+    let han = text
+        .chars()
+        .filter(|c| matches!(*c as u32, 0x4E00..=0x9FFF))
+        .count();
+    // Real Japanese sentences of any length virtually always contain kana.
+    !has_kana && han >= 6
+}
+
+fn chat_request(
+    cfg: &TranslatorConfig,
+    messages: &serde_json::Value,
+    max_tokens: u32,
+    temperature: f32,
+) -> Result<String> {
+    let url = format!("http://127.0.0.1:{}/v1/chat/completions", cfg.port);
     let body = serde_json::json!({
-        "prompt": prompt,
-        "n_predict": cfg.max_new_tokens,
-        "temperature": 0.2,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
         "top_p": 0.9,
-        "min_p": 0.01,
-        "repeat_penalty": 1.1,
-        "stop": ["<|im_end|>", "<|endoftext|>"],
         "cache_prompt": true
     });
-
     let resp: serde_json::Value = ureq::post(&url)
         .timeout(Duration::from_secs(30))
         .send_json(body)?
         .into_json()?;
-
     let text = resp
-        .get("content")
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
     Ok(text)
+}
+
+fn translate_once(
+    cfg: &TranslatorConfig,
+    line: &TranscriptLine,
+    context: &ContextWindow,
+) -> Result<String> {
+    let target_is_ja = line.src_lang != "ja";
+
+    // Static system prompt + history as real chat turns. The system prompt
+    // and old pairs form a stable prefix, so the server's prompt cache
+    // (cache_prompt) actually hits instead of reprocessing every request.
+    let mut messages: Vec<serde_json::Value> = Vec::with_capacity(2 * CONTEXT_PAIRS + 2);
+    messages.push(serde_json::json!({
+        "role": "system",
+        "content": system_prompt(&line.src_lang)
+    }));
+    for (src, dst) in context.history_for(&line.src_lang) {
+        messages.push(serde_json::json!({"role": "user", "content": src}));
+        messages.push(serde_json::json!({"role": "assistant", "content": dst}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": line.text}));
+
+    let cap = max_tokens_for(&line.text, cfg.max_new_tokens);
+    let msgs = serde_json::Value::Array(messages.clone());
+    let text = chat_request(cfg, &msgs, cap, 0.2)?;
+
+    if !looks_like_chinese(target_is_ja, &text) {
+        return Ok(text);
+    }
+
+    // One corrective retry: keep the cached prefix intact and append the bad
+    // answer + a fix-it turn. Higher temperature breaks the greedy-decoding rut.
+    warn!(id = line.id, text = %text, "Chinese leak detected — retrying");
+    messages.push(serde_json::json!({"role": "assistant", "content": text}));
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": "That was Chinese, not Japanese. Rewrite it as natural Japanese using hiragana, katakana, and Japanese kanji. Output only the Japanese translation."
+    }));
+    let msgs = serde_json::Value::Array(messages);
+    let retry = chat_request(cfg, &msgs, cap, 0.7)?;
+    if retry.is_empty() {
+        return Ok(text);
+    }
+    Ok(retry)
 }

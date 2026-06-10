@@ -3,7 +3,7 @@
 Live bilingual voice transcription TUI in Rust.
 
 - **ASR**: `cpal` → `webrtc-vad` → `whisper.cpp` (Metal) via `whisper-rs`
-- **Translation** (optional): Qwen2.5 via `llama-server` subprocess (Metal), queried over HTTP
+- **Translation** (optional): Gemma 3 via `llama-server` subprocess (Metal), queried over HTTP (OpenAI-compatible `/v1/chat/completions`)
 - **UI**: `ratatui` two-column display (English ↔ 日本語)
 - **Output**: timestamped Markdown table
 
@@ -20,12 +20,14 @@ Pick the tier that matches your machine.
 
 | Tier | Whisper | Translator | Disk | RAM |
 |------|---------|------------|------|-----|
-| **standard** | `small` (500 MB) | Qwen2.5-7B Q4_K_M (4.5 GB) | ~5 GB | ~7 GB |
-| **high** | `large-v3-turbo` (1.6 GB) | Qwen2.5-14B Q4_K_M (8.5 GB) | ~10 GB | ~11 GB |
+| **standard** | `small` (500 MB) | Gemma 3 4B Q4_K_M (2.5 GB) | ~3 GB | ~4 GB |
+| **high** | `large-v3-turbo` (1.6 GB) | Gemma 3 12B Q4_K_M (7.3 GB) | ~9 GB | ~10 GB |
 
-- **standard** is comfortable on any 16 GB M-series Mac.
+- **standard** is comfortable on any 8–16 GB M-series Mac.
 - **high** shines on 32 GB Macs and produces noticeably better JA ↔ EN translation
   and ASR accuracy.
+- Gemma 3 is strong at Japanese and, unlike the previously bundled Qwen2.5,
+  does not tend to leak Chinese into JA output.
 
 ## Install / update
 
@@ -150,7 +152,7 @@ cargo run --release -- notes.md
 ```
 
 `▶` marks the source-language side (the one the speaker actually used).
-The opposite column shows the Qwen-translated version (or `…` while pending).
+The opposite column shows the machine-translated version (or `…` while pending).
 
 ### Audio sources
 
@@ -201,10 +203,18 @@ Platform support for system-audio capture:
 
 On a 32 GB M4 MacBook Air with the recommended stack:
 - Whisper large-v3-turbo: transcribes faster than realtime on Metal
-- Qwen2.5-14B Q4_K_M: ~15–25 tok/s → a 20-word translation in ~2 s
-- Peak RSS: ~12 GB (plenty of headroom on 32 GB)
+- Gemma 3 12B Q4_K_M: ~20–30 tok/s, with prompt caching across segments
+- Peak RSS: ~10 GB; the standard tier stays around ~4 GB
 
-For lighter setups: use `ggml-small.bin` + Qwen2.5-7B-Instruct-Q4_K_M.
+For lighter setups: use `ggml-small.bin` + gemma-3-4b-it-Q4_K_M.
+
+The UI only re-renders when something changed and only wraps the lines
+visible in the viewport, so idle CPU usage is near zero and scrolling stays
+smooth in long sessions.
+
+Note: the translator now launches `llama-server` with `--jinja` (uses the
+GGUF's bundled chat template), which requires a llama.cpp release from 2025
+or later — `brew upgrade llama.cpp` if yours is older.
 
 ## Logs
 
