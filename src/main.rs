@@ -37,6 +37,10 @@ struct Args {
     /// Append a new session to an existing markdown file instead of overwriting.
     #[arg(short = 'r', long)]
     resume: bool,
+
+    /// Skip the 要約/Summary sections on quit (transcription-only output).
+    #[arg(long)]
+    no_summary: bool,
 }
 
 fn main() -> Result<()> {
@@ -56,6 +60,11 @@ fn main() -> Result<()> {
     }
     if let Some(l) = args.language {
         cfg.language = l;
+    }
+    if args.no_summary {
+        if let Some(t) = cfg.translator.as_mut() {
+            t.summarize = false;
+        }
     }
     cfg.log_dir = log_dir;
 

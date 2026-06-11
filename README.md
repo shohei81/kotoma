@@ -128,7 +128,7 @@ cargo run --release -- notes.md
 
 | Key           | Action                          |
 |---------------|---------------------------------|
-| `q` / `Ctrl+C`| Save transcript and quit (writes `### 要約` + `### Summary` sections when the translator is running) |
+| `q` / `Ctrl+C`| Save transcript and quit (writes `### 要約` + `### Summary` sections when the translator is running; disable with `--no-summary` or `summarize = false` in `[translator]`) |
 | `s`           | Save transcript now             |
 | `l`           | Cycle Whisper language (en → ja → auto) |
 | `space`       | Pause / resume UI               |

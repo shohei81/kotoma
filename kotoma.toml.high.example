@@ -42,3 +42,6 @@ port = 8787
 n_ctx = 8192
 max_new_tokens = 512
 startup_timeout_secs = 120
+
+# Skip the 要約/Summary sections on quit (or run `kotoma --no-summary`).
+# summarize = false

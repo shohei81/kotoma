@@ -1,6 +1,6 @@
 [package]
 name = "kotoma"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Live bilingual voice transcription TUI powered by whisper.cpp"
 license = "MIT"

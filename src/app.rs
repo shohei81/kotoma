@@ -354,7 +354,8 @@ fn run_loop(
                         (KeyCode::Char('q'), _)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                             let summary = cfg.translator.as_ref().and_then(|t| {
-                                if !matches!(translator_status, TranslatorStatus::Ready)
+                                if !t.summarize
+                                    || !matches!(translator_status, TranslatorStatus::Ready)
                                     || lines.is_empty()
                                 {
                                     return None;

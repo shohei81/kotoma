@@ -63,6 +63,10 @@ pub struct TranslatorConfigToml {
     pub max_new_tokens: u32,
     #[serde(default = "default_translator_startup_timeout")]
     pub startup_timeout_secs: u64,
+    /// Write 要約/Summary sections on quit. Disable for transcription-only
+    /// workflows where the table is the deliverable.
+    #[serde(default = "default_summarize")]
+    pub summarize: bool,
 }
 
 fn default_output() -> PathBuf {
@@ -103,6 +107,9 @@ fn default_translator_max_new() -> u32 {
 }
 fn default_translator_startup_timeout() -> u64 {
     120
+}
+fn default_summarize() -> bool {
+    true
 }
 
 impl Config {
