@@ -358,9 +358,17 @@ fn translate_once(
 /// server's context window (n_ctx defaults to 8192).
 const SUMMARY_MAX_CHARS: usize = 8_000;
 
-/// Summarize a finished session in Japanese using the already-running
-/// llama-server. Called from the quit path; any failure is non-fatal.
-pub fn summarize(port: u16, lines: &[TranscriptLine]) -> Result<String> {
+pub struct Summary {
+    pub ja: String,
+    /// English rendering of the same bullets; None when that step failed.
+    pub en: Option<String>,
+}
+
+/// Summarize a finished session using the already-running llama-server:
+/// Japanese bullets first, then the same bullets translated to English so
+/// both sides of a bilingual meeting can read the recap. Called from the
+/// quit path; any failure is non-fatal.
+pub fn summarize(port: u16, lines: &[TranscriptLine]) -> Result<Summary> {
     let mut transcript = String::new();
     for l in lines {
         transcript.push_str(&format!("[{}] {}\n", l.started_at.format("%H:%M"), l.text));
@@ -377,7 +385,26 @@ pub fn summarize(port: u16, lines: &[TranscriptLine]) -> Result<String> {
         {"role": "system", "content": "あなたは議事録アシスタントです。与えられた会話の書き起こしを日本語で要約してください。\n- 主なトピックと決定事項を3〜6点の箇条書きで\n- 各項目は「- 」で始まる1行で簡潔に\n- 出力は箇条書きのみ。前置きや説明は不要"},
         {"role": "user", "content": transcript}
     ]);
-    chat_request(port, &messages, 256, 0.3)
+    let ja = chat_request(port, &messages, 256, 0.3)?;
+    if ja.is_empty() {
+        return Ok(Summary { ja, en: None });
+    }
+
+    // Translating the finished bullets (instead of re-summarizing in English)
+    // keeps both sections saying the same thing.
+    let messages = serde_json::json!([
+        {"role": "system", "content": "Translate the following Japanese meeting-summary bullet points into English.\n- Keep the bullet-list format (one \"- \" item per line)\n- Output only the translated bullets, nothing else"},
+        {"role": "user", "content": ja}
+    ]);
+    let en = match chat_request(port, &messages, 256, 0.2) {
+        Ok(s) if !s.is_empty() => Some(s),
+        Ok(_) => None,
+        Err(e) => {
+            warn!(error = %e, "english summary failed — keeping Japanese only");
+            None
+        }
+    };
+    Ok(Summary { ja, en })
 }
 
 #[cfg(test)]

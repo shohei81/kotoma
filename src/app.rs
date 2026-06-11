@@ -385,7 +385,7 @@ fn run_loop(
                                     );
                                 });
                                 match translate::summarize(t.port, &lines) {
-                                    Ok(s) if !s.is_empty() => Some(s),
+                                    Ok(s) if !s.ja.is_empty() => Some(s),
                                     Ok(_) => None,
                                     Err(e) => {
                                         tracing::warn!(error = %e, "summary failed — saving without it");
@@ -397,7 +397,7 @@ fn run_loop(
                                 &cfg.output_path,
                                 &lines,
                                 existing_content,
-                                summary.as_deref(),
+                                summary.as_ref(),
                             )?;
                             info!(path = %cfg.output_path.display(), "saved on quit");
                             break;
