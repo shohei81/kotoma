@@ -96,7 +96,7 @@ fn default_translator_port() -> u16 {
     8787
 }
 fn default_translator_n_ctx() -> u32 {
-    4096
+    8192
 }
 fn default_translator_max_new() -> u32 {
     512

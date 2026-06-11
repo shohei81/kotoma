@@ -35,7 +35,20 @@ pub struct DevicePicker {
     pub focus: u8,
 }
 
+/// Restore the terminal before the default panic output. Without this a
+/// panic leaves the terminal in raw mode + alternate screen and the user's
+/// shell appears broken.
+fn install_panic_hook() {
+    let original = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+        original(info);
+    }));
+}
+
 pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
+    install_panic_hook();
     let (audio_tx, audio_rx) = bounded::<Vec<f32>>(64);
     let (seg_tx, seg_rx) = bounded::<Segment>(16);
     let (line_tx, line_rx) = bounded::<TranscriptLine>(32);
@@ -168,6 +181,7 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
     res
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     cfg: &Config,
@@ -339,12 +353,57 @@ fn run_loop(
                     match (code, modifiers) {
                         (KeyCode::Char('q'), _)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            markdown::write(&cfg.output_path, &lines, existing_content)?;
+                            let summary = cfg.translator.as_ref().and_then(|t| {
+                                if !matches!(translator_status, TranslatorStatus::Ready)
+                                    || lines.is_empty()
+                                {
+                                    return None;
+                                }
+                                // One synchronous draw so the user sees why
+                                // quitting takes a few seconds.
+                                saved_note = Some("要約を生成中…".to_string());
+                                let lang =
+                                    language.read().map(|g| g.clone()).unwrap_or_default();
+                                let _ = terminal.draw(|f| {
+                                    draw(
+                                        f,
+                                        &UiState {
+                                            lines: &lines,
+                                            level: level_smooth,
+                                            language: &lang,
+                                            recording: !paused.load(Ordering::Relaxed),
+                                            input_name: &input_name,
+                                            model_name,
+                                            saved_note: saved_note.as_deref(),
+                                            translator_status,
+                                            picker: None,
+                                            draft,
+                                            scroll_up,
+                                            scroll_max: &scroll_max_cell,
+                                        },
+                                        &mut layout,
+                                    );
+                                });
+                                match translate::summarize(t.port, &lines) {
+                                    Ok(s) if !s.is_empty() => Some(s),
+                                    Ok(_) => None,
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "summary failed — saving without it");
+                                        None
+                                    }
+                                }
+                            });
+                            markdown::write(
+                                &cfg.output_path,
+                                &lines,
+                                existing_content,
+                                summary.as_deref(),
+                            )?;
                             info!(path = %cfg.output_path.display(), "saved on quit");
                             break;
                         }
                         (KeyCode::Char('s'), _) => {
-                            markdown::write(&cfg.output_path, &lines, existing_content)?;
+                            markdown::write(&cfg.output_path, &lines, existing_content, None)?;
                             saved_note = Some(format!("saved → {}", cfg.output_path.display()));
                         }
                         (KeyCode::Char('l'), _) => {

@@ -38,3 +38,28 @@ pub fn detect_lang(text: &str) -> &'static str {
         "en"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::detect_lang;
+
+    #[test]
+    fn kana_is_ja() {
+        assert_eq!(detect_lang("こんにちは"), "ja");
+    }
+
+    #[test]
+    fn kanji_is_ja() {
+        assert_eq!(detect_lang("会議"), "ja");
+    }
+
+    #[test]
+    fn ascii_is_en() {
+        assert_eq!(detect_lang("Hello, world"), "en");
+    }
+
+    #[test]
+    fn mixed_with_kana_is_ja() {
+        assert_eq!(detect_lang("OKです"), "ja");
+    }
+}

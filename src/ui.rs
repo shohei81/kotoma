@@ -269,6 +269,7 @@ fn centered_rect(pct_x: u16, pct_y: u16, r: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_transcript_column(
     f: &mut Frame,
     area: Rect,

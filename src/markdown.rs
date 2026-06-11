@@ -8,6 +8,7 @@ pub fn write(
     path: &Path,
     lines: &[TranscriptLine],
     existing: Option<&str>,
+    summary: Option<&str>,
 ) -> Result<()> {
     if lines.is_empty() && existing.is_none() {
         return Ok(());
@@ -23,13 +24,13 @@ pub fn write(
             }
             writeln!(f)?;
             if !lines.is_empty() {
-                write_session(&mut f, lines)?;
+                write_session(&mut f, lines, summary)?;
             }
         }
         None => {
             write_frontmatter(&mut f)?;
             if !lines.is_empty() {
-                write_session(&mut f, lines)?;
+                write_session(&mut f, lines, summary)?;
             }
         }
     }
@@ -46,7 +47,11 @@ fn write_frontmatter(f: &mut std::fs::File) -> Result<()> {
     Ok(())
 }
 
-fn write_session(f: &mut std::fs::File, lines: &[TranscriptLine]) -> Result<()> {
+fn write_session(
+    f: &mut std::fs::File,
+    lines: &[TranscriptLine],
+    summary: Option<&str>,
+) -> Result<()> {
     let started: DateTime<Local> = lines
         .first()
         .map(|l| l.started_at)
@@ -73,6 +78,12 @@ fn write_session(f: &mut std::fs::File, lines: &[TranscriptLine]) -> Result<()> 
         )?;
     }
     writeln!(f)?;
+    if let Some(s) = summary {
+        writeln!(f, "### 要約")?;
+        writeln!(f)?;
+        writeln!(f, "{}", s.trim())?;
+        writeln!(f)?;
+    }
     writeln!(f, "| time | English | 日本語 |")?;
     writeln!(f, "|------|---------|--------|")?;
 
@@ -96,4 +107,14 @@ fn write_session(f: &mut std::fs::File, lines: &[TranscriptLine]) -> Result<()> 
 
 fn escape_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_cell;
+
+    #[test]
+    fn escapes_pipes_and_newlines() {
+        assert_eq!(escape_cell("a|b\nc"), "a\\|b c");
+    }
 }

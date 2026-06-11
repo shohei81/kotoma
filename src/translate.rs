@@ -129,38 +129,69 @@ pub fn spawn(cfg: TranslatorConfig, line_rx: Receiver<TranscriptLine>, ui_tx: Se
     });
 }
 
+const MAX_SERVER_RESTARTS: u32 = 5;
+
 fn run(
     cfg: &TranslatorConfig,
     line_rx: &Receiver<TranscriptLine>,
     ui_tx: &Sender<UiMsg>,
 ) -> Result<()> {
-    let mut server = ServerHandle::start(cfg)?;
-
-    wait_for_health(cfg, &mut server).context("waiting for llama-server readiness")?;
-    let _ = ui_tx.send(UiMsg::TranslatorStatus(TranslatorStatus::Ready));
-    info!("llama-server ready");
-
     let mut context = ContextWindow::new();
+    // A line whose translation failed because the server died; retried after restart.
+    let mut pending: Option<TranscriptLine> = None;
+    let mut restarts = 0u32;
 
-    while let Ok(line) = line_rx.recv() {
-        let id = line.id;
-        match translate_once(cfg, &line, &context) {
-            Ok(translated) if !translated.is_empty() => {
-                debug!(id, text = %translated, "translation complete");
-                context.push(&line.src_lang, &line.text, &translated);
-                let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
+    loop {
+        let mut server = ServerHandle::start(cfg)?;
+        if let Err(e) = wait_for_health(cfg, &mut server) {
+            if restarts >= MAX_SERVER_RESTARTS {
+                return Err(e).context("waiting for llama-server readiness");
             }
-            Ok(_) => {
-                debug!(id, "empty translation");
-            }
-            Err(e) => {
-                warn!(id, error = %e, "translation failed");
+            restarts += 1;
+            warn!(restarts, error = %e, "llama-server not ready — restarting");
+            continue;
+        }
+        let _ = ui_tx.send(UiMsg::TranslatorStatus(TranslatorStatus::Ready));
+        info!("llama-server ready");
+
+        loop {
+            let line = match pending.take() {
+                Some(l) => l,
+                None => match line_rx.recv() {
+                    Ok(l) => l,
+                    Err(_) => return Ok(()), // upstream closed — clean shutdown
+                },
+            };
+            let id = line.id;
+            match translate_once(cfg, &line, &context) {
+                Ok(translated) if !translated.is_empty() => {
+                    debug!(id, text = %translated, "translation complete");
+                    context.push(&line.src_lang, &line.text, &translated);
+                    let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
+                    restarts = 0;
+                }
+                Ok(_) => {
+                    debug!(id, "empty translation");
+                }
+                Err(e) => {
+                    if server.exited().is_some() {
+                        if restarts >= MAX_SERVER_RESTARTS {
+                            return Err(anyhow!(
+                                "llama-server keeps crashing (gave up after {MAX_SERVER_RESTARTS} restarts)"
+                            ));
+                        }
+                        restarts += 1;
+                        warn!(id, restarts, error = %e, "llama-server died — restarting");
+                        let _ = ui_tx.send(UiMsg::TranslatorStatus(TranslatorStatus::Loading));
+                        pending = Some(line);
+                        break; // restart the server, then retry this line
+                    }
+                    // Transient (timeout etc.) — drop this line, keep going.
+                    warn!(id, error = %e, "translation failed");
+                }
             }
         }
     }
-
-    drop(server);
-    Ok(())
 }
 
 fn wait_for_health(cfg: &TranslatorConfig, server: &mut ServerHandle) -> Result<()> {
@@ -249,12 +280,12 @@ fn looks_like_chinese(target_is_ja: bool, text: &str) -> bool {
 }
 
 fn chat_request(
-    cfg: &TranslatorConfig,
+    port: u16,
     messages: &serde_json::Value,
     max_tokens: u32,
     temperature: f32,
 ) -> Result<String> {
-    let url = format!("http://127.0.0.1:{}/v1/chat/completions", cfg.port);
+    let url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
     let body = serde_json::json!({
         "messages": messages,
         "max_tokens": max_tokens,
@@ -301,7 +332,7 @@ fn translate_once(
 
     let cap = max_tokens_for(&line.text, cfg.max_new_tokens);
     let msgs = serde_json::Value::Array(messages.clone());
-    let text = chat_request(cfg, &msgs, cap, 0.2)?;
+    let text = chat_request(cfg.port, &msgs, cap, 0.2)?;
 
     if !looks_like_chinese(target_is_ja, &text) {
         return Ok(text);
@@ -316,9 +347,86 @@ fn translate_once(
         "content": "That was Chinese, not Japanese. Rewrite it as natural Japanese using hiragana, katakana, and Japanese kanji. Output only the Japanese translation."
     }));
     let msgs = serde_json::Value::Array(messages);
-    let retry = chat_request(cfg, &msgs, cap, 0.7)?;
+    let retry = chat_request(cfg.port, &msgs, cap, 0.7)?;
     if retry.is_empty() {
         return Ok(text);
     }
     Ok(retry)
+}
+
+/// Tail of the transcript fed to the summarizer — must stay well inside the
+/// server's context window (n_ctx defaults to 8192).
+const SUMMARY_MAX_CHARS: usize = 8_000;
+
+/// Summarize a finished session in Japanese using the already-running
+/// llama-server. Called from the quit path; any failure is non-fatal.
+pub fn summarize(port: u16, lines: &[TranscriptLine]) -> Result<String> {
+    let mut transcript = String::new();
+    for l in lines {
+        transcript.push_str(&format!("[{}] {}\n", l.started_at.format("%H:%M"), l.text));
+    }
+    let total = transcript.chars().count();
+    if total > SUMMARY_MAX_CHARS {
+        transcript = transcript
+            .chars()
+            .skip(total - SUMMARY_MAX_CHARS)
+            .collect();
+    }
+
+    let messages = serde_json::json!([
+        {"role": "system", "content": "あなたは議事録アシスタントです。与えられた会話の書き起こしを日本語で要約してください。\n- 主なトピックと決定事項を3〜6点の箇条書きで\n- 各項目は「- 」で始まる1行で簡潔に\n- 出力は箇条書きのみ。前置きや説明は不要"},
+        {"role": "user", "content": transcript}
+    ]);
+    chat_request(port, &messages, 256, 0.3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_tokens_has_floor_scale_and_cap() {
+        assert_eq!(max_tokens_for("hi", 512), 48); // floor
+        assert_eq!(max_tokens_for(&"あ".repeat(100), 512), 216); // 100*2+16
+        assert_eq!(max_tokens_for(&"a".repeat(1000), 512), 512); // cap
+    }
+
+    #[test]
+    fn simplified_chars_flag_chinese_leak() {
+        assert!(looks_like_chinese(true, "我们说这个"));
+        assert!(!looks_like_chinese(true, "私たちはこれについて話します"));
+    }
+
+    #[test]
+    fn kana_free_long_han_run_is_suspicious() {
+        assert!(looks_like_chinese(true, "今天天气很好我想去公园散步"));
+    }
+
+    #[test]
+    fn english_target_never_flags() {
+        assert!(!looks_like_chinese(false, "我们说这个"));
+    }
+
+    #[test]
+    fn context_history_filters_by_direction() {
+        let mut c = ContextWindow::new();
+        c.push("en", "hello", "こんにちは");
+        c.push("ja", "元気です", "I'm fine");
+        c.push("en", "bye", "さようなら");
+        assert_eq!(
+            c.history_for("en"),
+            vec![("hello", "こんにちは"), ("bye", "さようなら")]
+        );
+        assert_eq!(c.history_for("ja"), vec![("元気です", "I'm fine")]);
+    }
+
+    #[test]
+    fn context_window_keeps_only_recent_pairs() {
+        let mut c = ContextWindow::new();
+        for i in 0..10 {
+            c.push("en", &format!("s{i}"), &format!("d{i}"));
+        }
+        assert_eq!(c.pairs.len(), CONTEXT_PAIRS);
+        assert_eq!(c.pairs.front().unwrap().1, "s7");
+    }
 }

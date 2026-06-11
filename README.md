@@ -9,10 +9,10 @@ Live bilingual voice transcription TUI in Rust.
 
 ## Requirements
 
-- Rust (stable, 2021 edition)
-- CMake + a C/C++ toolchain (needed to build whisper.cpp)
-- `llama-server` on PATH → `brew install llama.cpp`
-- Apple Silicon (for Metal) recommended
+- `llama-server` on PATH → `brew install llama.cpp` (only for translation)
+- Apple Silicon Mac: nothing else — the installer fetches a prebuilt binary
+- Other platforms / `--from-source`: Rust (stable) + CMake + a C/C++ toolchain
+  (needed to build whisper.cpp)
 
 ## Model tiers
 
@@ -40,8 +40,9 @@ curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | b
 ```
 
 The installer:
-- `cargo install --git … --force kotoma` — builds from `main`, replaces the
-  existing binary.
+- Downloads the latest prebuilt binary from GitHub Releases into
+  `~/.local/bin/kotoma` (Apple Silicon macOS). Elsewhere — or with
+  `--from-source` — it falls back to `cargo install --git … --force kotoma`.
 - Downloads tier-appropriate models into `~/.config/kotoma/models/`
   (skips anything already present).
 - Writes `~/.config/kotoma/kotoma.toml` from the tier example **only if
@@ -50,9 +51,9 @@ The installer:
 
 ### Update
 
-Run the exact same command. `cargo install --force` re-fetches `main`,
-rebuilds, and swaps the binary. Existing models and your edited config
-are preserved.
+Run the exact same command — it swaps in the latest binary (or rebuilds
+from `main` when building from source). Existing models and your edited
+config are preserved.
 
 ### From a cloned repo (dev)
 
@@ -127,7 +128,7 @@ cargo run --release -- notes.md
 
 | Key           | Action                          |
 |---------------|---------------------------------|
-| `q` / `Ctrl+C`| Save transcript and quit        |
+| `q` / `Ctrl+C`| Save transcript and quit (writes a Japanese `### 要約` section when the translator is running) |
 | `s`           | Save transcript now             |
 | `l`           | Cycle Whisper language (en → ja → auto) |
 | `space`       | Pause / resume UI               |

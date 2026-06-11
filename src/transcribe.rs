@@ -132,7 +132,21 @@ impl TranscribeRunner {
                 continue;
             }
 
-            let src_lang = detect_lang(&cleaned).to_string();
+            // In auto mode whisper ran real language detection on the audio —
+            // trust it over the character-class heuristic (which a romanized
+            // or all-ASCII Japanese line can fool). Forced en/ja skips
+            // detection, so the text heuristic stays authoritative there.
+            let src_lang = if lang_code == "auto" {
+                state
+                    .full_lang_id_from_state()
+                    .ok()
+                    .and_then(whisper_rs::get_lang_str)
+                    .filter(|s| *s == "ja" || *s == "en")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| detect_lang(&cleaned).to_string())
+            } else {
+                detect_lang(&cleaned).to_string()
+            };
             info!(
                 len = cleaned.len(),
                 speech_ms = seg.speech_ms,

@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest # arm64 (Apple Silicon)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        # Version-less asset name so install.sh can use the stable
+        # releases/latest/download/ URL without an API call.
+        run: tar -C target/release -czf kotoma-aarch64-apple-darwin.tar.gz kotoma
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kotoma-aarch64-apple-darwin.tar.gz
+          generate_release_notes: true
