@@ -75,6 +75,7 @@ pub struct UiState<'a> {
     pub saved_note: Option<&'a str>,
     pub translator_status: TranslatorStatus,
     pub picker: Option<&'a DevicePicker>,
+    pub show_help: bool,
     pub draft: DraftState,
     /// Rows scrolled up from the tail. 0 = follow latest.
     pub scroll_up: u16,
@@ -166,11 +167,11 @@ pub fn draw(f: &mut Frame, state: &UiState, layout: &mut TranscriptLayout) {
     };
     let help = match state.saved_note {
         Some(note) => format!(
-            " {} · q quit&save · s save · l lang · d device · m sys-audio · space pause ·{}",
+            " {} · q quit&save · s save · ? help ·{}",
             note, nav
         ),
         None => format!(
-            " q quit&save · s save · l lang · d device · m sys-audio · space pause ·{}",
+            " q quit&save · s save · l lang · d device · m sys-audio · space pause · ? help ·{}",
             nav
         ),
     };
@@ -180,6 +181,44 @@ pub fn draw(f: &mut Frame, state: &UiState, layout: &mut TranscriptLayout) {
     if let Some(pk) = state.picker {
         render_device_picker(f, pk);
     }
+    if state.show_help {
+        render_help_overlay(f);
+    }
+}
+
+fn render_help_overlay(f: &mut Frame) {
+    const ROWS: &[(&str, &str)] = &[
+        ("q / Ctrl+C", "Save & quit (+ 要約/Summary)"),
+        ("s", "Save now"),
+        ("l", "Cycle language (en → ja → auto)"),
+        ("space", "Pause / resume capture"),
+        ("m", "Toggle system-audio mix"),
+        ("d", "Audio source picker"),
+        ("↑ / ↓", "Scroll one line"),
+        ("PgUp / PgDn", "Scroll half a page"),
+        ("Home / End", "Oldest line / follow live"),
+        ("mouse wheel", "Scroll transcript"),
+        ("?", "Toggle this help"),
+    ];
+
+    let area = centered_rect(50, 60, f.area());
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keys  (? or esc to close) ");
+    let lines: Vec<Line> = ROWS
+        .iter()
+        .map(|(key, desc)| {
+            Line::from(vec![
+                Span::styled(
+                    format!(" {key:<13}"),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(*desc),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn render_device_picker(f: &mut Frame, pk: &DevicePicker) {

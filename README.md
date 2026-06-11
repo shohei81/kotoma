@@ -135,6 +135,7 @@ cargo run --release -- notes.md
 | `m`           | Toggle system-audio mix (auto-detected) on / off       |
 | `d`           | Pick mic + system-audio source (mix both, or either alone) |
 | `Tab`         | (in picker) switch between mic and system-audio columns |
+| `?`           | Toggle the keybinding help overlay |
 | `↑` / `↓`     | Scroll transcript up / down one line |
 | `PgUp` / `PgDn` | Scroll by half a page          |
 | `Home` / `End` | Jump to oldest line / resume live tail |

@@ -206,6 +206,7 @@ fn run_loop(
     let mut input_name = capture.input_name.clone();
     let mut picker: Option<DevicePicker> = None;
     let mut draft = DraftState::default();
+    let mut show_help = false;
     let mut scroll_up: u16 = 0;
     let scroll_max_cell: Cell<u16> = Cell::new(0);
     let mut layout = TranscriptLayout::new();
@@ -259,6 +260,7 @@ fn run_loop(
                         saved_note: saved_note.as_deref(),
                         translator_status,
                         picker: picker.as_ref(),
+                        show_help,
                         draft,
                         scroll_up,
                         scroll_max: &scroll_max_cell,
@@ -288,7 +290,15 @@ fn run_loop(
                 code, modifiers, ..
             }) = ev
             {
-                if let Some(pk) = picker.as_mut() {
+                if show_help {
+                    match code {
+                        KeyCode::Char('?')
+                        | KeyCode::Esc
+                        | KeyCode::Char('q')
+                        | KeyCode::Enter => show_help = false,
+                        _ => {}
+                    }
+                } else if let Some(pk) = picker.as_mut() {
                     match code {
                         KeyCode::Esc | KeyCode::Char('q') => {
                             picker = None;
@@ -378,6 +388,7 @@ fn run_loop(
                                             saved_note: saved_note.as_deref(),
                                             translator_status,
                                             picker: None,
+                                            show_help: false,
                                             draft,
                                             scroll_up,
                                             scroll_max: &scroll_max_cell,
@@ -468,6 +479,9 @@ fn run_loop(
                                     tracing::error!(error = %e, "system audio toggle failed");
                                 }
                             }
+                        }
+                        (KeyCode::Char('?'), _) => {
+                            show_help = true;
                         }
                         (KeyCode::Up, _) => {
                             scroll_up = scroll_up.saturating_add(1).min(scroll_max_cell.get());
