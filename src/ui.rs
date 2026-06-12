@@ -5,6 +5,10 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 use std::cell::Cell;
 
+/// Sentinel `col_lang` for the single-column (no-translation) view: every line
+/// renders its own transcribed text, whatever language it was detected as.
+const SOURCE_COL: &str = "*";
+
 /// Per-column cache of wrapped row counts, so a frame only re-wraps lines
 /// that are new (or whose translation just arrived) instead of the whole
 /// transcript. Without this, rendering cost grows with session length and
@@ -74,6 +78,9 @@ pub struct UiState<'a> {
     pub model_name: &'a str,
     pub saved_note: Option<&'a str>,
     pub translator_status: TranslatorStatus,
+    /// When true, translation is off: render one full-width column showing
+    /// each line's transcribed (source) text instead of the EN ↔ JA split.
+    pub single_column: bool,
     pub picker: Option<&'a DevicePicker>,
     pub show_help: bool,
     pub draft: DraftState,
@@ -133,32 +140,50 @@ pub fn draw(f: &mut Frame, state: &UiState, layout: &mut TranscriptLayout) {
     let draft_para = Paragraph::new(draft_text).style(draft_style);
     f.render_widget(draft_para, chunks[1]);
 
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[2]);
-
     state.scroll_max.set(0);
-    render_transcript_column(
-        f,
-        cols[0],
-        state.lines,
-        "en",
-        " English ",
-        state.scroll_up,
-        state.scroll_max,
-        &mut layout.en,
-    );
-    render_transcript_column(
-        f,
-        cols[1],
-        state.lines,
-        "ja",
-        " 日本語 ",
-        state.scroll_up,
-        state.scroll_max,
-        &mut layout.ja,
-    );
+    if state.single_column {
+        let title = match state.language {
+            "en" => " English ",
+            "ja" => " 日本語 ",
+            _ => " Transcript ",
+        };
+        render_transcript_column(
+            f,
+            chunks[2],
+            state.lines,
+            SOURCE_COL,
+            title,
+            state.scroll_up,
+            state.scroll_max,
+            &mut layout.en,
+        );
+    } else {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[2]);
+
+        render_transcript_column(
+            f,
+            cols[0],
+            state.lines,
+            "en",
+            " English ",
+            state.scroll_up,
+            state.scroll_max,
+            &mut layout.en,
+        );
+        render_transcript_column(
+            f,
+            cols[1],
+            state.lines,
+            "ja",
+            " 日本語 ",
+            state.scroll_up,
+            state.scroll_max,
+            &mut layout.ja,
+        );
+    }
 
     let nav = if state.scroll_up == 0 {
         " ↑/PgUp scroll ".to_string()
@@ -365,7 +390,7 @@ fn render_transcript_column(
 
 fn render_line<'a>(line: &'a TranscriptLine, col_lang: &str) -> Line<'a> {
     let ts = line.started_at.format("%H:%M:%S").to_string();
-    let is_source = line.src_lang == col_lang;
+    let is_source = col_lang == SOURCE_COL || line.src_lang == col_lang;
     let (text, style) = if is_source {
         (line.text.as_str(), Style::default())
     } else {

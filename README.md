@@ -73,7 +73,10 @@ the config file's directory, so `models/foo` → `~/.config/kotoma/models/foo`.
 
 To disable translation permanently, delete or comment out the `[translator]`
 section. To disable it for a single run, pass `--no-translate` — both take the
-transcript-only path (no `llama-server`).
+transcript-only path (no `llama-server`). With translation off the UI collapses
+to a single full-width column showing each line's transcribed language (so a
+`-l ja` run shows only 日本語, `-l auto` shows whatever each line was detected
+as) instead of the English ↔ 日本語 split.
 
 ## Run
 
