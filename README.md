@@ -88,13 +88,16 @@ kotoma
 kotoma --resume notes.md
 
 # override language at launch
-kotoma meeting.md -l auto
+kotoma -l auto meeting.md
 
 # transcribe only, no translation (skips llama-server) for this run
-kotoma notes.md --no-translate
+kotoma --no-translate notes.md
+
+# transcribe only in a single language (no translation)
+kotoma --no-translate -l ja notes.md
 
 # explicit config file
-kotoma notes.md -c ./project-specific.toml
+kotoma -c ./project-specific.toml notes.md
 ```
 
 ### Output modes
