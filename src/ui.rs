@@ -226,23 +226,35 @@ fn render_help_overlay(f: &mut Frame) {
         ("?", "Toggle this help"),
     ];
 
+    // Launch flags can't be toggled at runtime, but listing them here saves a
+    // trip to `--help` for the most common ones.
+    const FLAGS: &[(&str, &str)] = &[
+        ("--no-translate", "Transcribe only (no translation)"),
+        ("-l <en|ja|auto>", "Set starting language"),
+        ("-r / --resume", "Append to an existing file"),
+    ];
+
     let area = centered_rect(50, 60, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Keys  (? or esc to close) ");
-    let lines: Vec<Line> = ROWS
-        .iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                Span::styled(
-                    format!(" {key:<13}"),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(*desc),
-            ])
-        })
-        .collect();
+        .title(" Help  (? or esc to close) ");
+    let row = |key: &str, desc: &str| {
+        Line::from(vec![
+            Span::styled(
+                format!(" {key:<16}"),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(desc.to_string()),
+        ])
+    };
+    let mut lines: Vec<Line> = ROWS.iter().map(|(k, d)| row(k, d)).collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " Launch flags",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+    lines.extend(FLAGS.iter().map(|(k, d)| row(k, d)));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
