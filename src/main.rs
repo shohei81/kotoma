@@ -41,6 +41,10 @@ struct Args {
     /// Skip the 要約/Summary sections on quit (transcription-only output).
     #[arg(long)]
     no_summary: bool,
+
+    /// Disable translation for this run; transcribe only (skips llama-server).
+    #[arg(long)]
+    no_translate: bool,
 }
 
 fn main() -> Result<()> {
@@ -60,6 +64,9 @@ fn main() -> Result<()> {
     }
     if let Some(l) = args.language {
         cfg.language = l;
+    }
+    if args.no_translate {
+        cfg.translator = None;
     }
     if args.no_summary {
         if let Some(t) = cfg.translator.as_mut() {

@@ -71,8 +71,9 @@ the corresponding models into `~/.config/kotoma/models/` and copy the
 example to `~/.config/kotoma/kotoma.toml`. Relative paths resolve against
 the config file's directory, so `models/foo` → `~/.config/kotoma/models/foo`.
 
-To disable translation, delete or comment out the `[translator]` section.
-The transcript-only path keeps working.
+To disable translation permanently, delete or comment out the `[translator]`
+section. To disable it for a single run, pass `--no-translate` — both take the
+transcript-only path (no `llama-server`).
 
 ## Run
 
@@ -88,6 +89,9 @@ kotoma --resume notes.md
 
 # override language at launch
 kotoma meeting.md -l auto
+
+# transcribe only, no translation (skips llama-server) for this run
+kotoma notes.md --no-translate
 
 # explicit config file
 kotoma notes.md -c ./project-specific.toml
