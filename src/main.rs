@@ -16,7 +16,11 @@ use std::path::{Path, PathBuf};
 const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", "log"];
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Live bilingual voice transcription TUI")]
+#[command(
+    version,
+    about = "Live bilingual voice transcription TUI",
+    after_help = "Commands:\n  update [standard|high]  Update kotoma in place (re-runs install.sh)"
+)]
 struct Args {
     /// Output markdown file. Example: `kotoma notes.md`
     #[arg(value_name = "OUTPUT.md")]
@@ -47,7 +51,16 @@ struct Args {
     no_translate: bool,
 }
 
+const INSTALL_URL: &str = "https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh";
+
 fn main() -> Result<()> {
+    // `kotoma update [tier]` self-updates by re-running install.sh. Handle it
+    // before clap so it doesn't collide with the positional OUTPUT argument.
+    let raw: Vec<String> = std::env::args().collect();
+    if raw.get(1).map(String::as_str) == Some("update") {
+        return run_update(raw.get(2).map(String::as_str));
+    }
+
     let args = Args::parse();
 
     let log_dir = log_dir_path();
@@ -88,6 +101,55 @@ fn main() -> Result<()> {
     };
 
     app::run(cfg, existing)
+}
+
+/// Re-run install.sh to update the binary (and refresh any missing models).
+/// `tier` comes from the CLI; if omitted we infer it from the installed models,
+/// since install.sh requires an explicit standard|high.
+fn run_update(tier: Option<&str>) -> Result<()> {
+    let tier = match tier {
+        Some(t @ ("standard" | "high")) => t.to_string(),
+        Some(other) => bail!("unknown tier '{other}' (expected: standard | high)"),
+        None => infer_tier()
+            .ok_or_else(|| anyhow::anyhow!(
+                "could not infer the model tier — run `kotoma update standard` or `kotoma update high`"
+            ))?,
+    };
+
+    // Match the binary we're replacing: a cargo-installed kotoma lives under
+    // ~/.cargo/bin, so build from source to update it in place; a prebuilt
+    // binary (~/.local/bin) takes install.sh's default download path.
+    let from_source = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.contains("/.cargo/")))
+        .unwrap_or(false);
+
+    let mut script = format!("curl -fsSL '{INSTALL_URL}' | bash -s -- {tier}");
+    if from_source {
+        script.push_str(" --from-source");
+    }
+
+    println!("==> Updating kotoma (tier={tier}{})", if from_source { ", from source" } else { "" });
+    let status = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .status()?;
+    if !status.success() {
+        bail!("update failed (install.sh exited with {status})");
+    }
+    Ok(())
+}
+
+/// Guess the installed tier from the whisper model present in the config dir.
+fn infer_tier() -> Option<String> {
+    let models = dirs::home_dir()?.join(".config/kotoma/models");
+    if models.join("ggml-large-v3-turbo.bin").exists() {
+        Some("high".to_string())
+    } else if models.join("ggml-small.bin").exists() {
+        Some("standard".to_string())
+    } else {
+        None
+    }
 }
 
 fn normalize_output_path(path: PathBuf) -> Result<PathBuf> {

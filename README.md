@@ -55,6 +55,17 @@ Run the exact same command — it swaps in the latest binary (or rebuilds
 from `main` when building from source). Existing models and your edited
 config are preserved.
 
+Or, from an already-installed kotoma:
+
+```sh
+kotoma update          # tier inferred from installed models
+kotoma update high     # force a tier
+```
+
+This re-runs `install.sh` for you — building from source when the current
+binary is a `cargo install` one (`~/.cargo/bin`), otherwise downloading the
+latest prebuilt binary.
+
 ### From a cloned repo (dev)
 
 ```sh
