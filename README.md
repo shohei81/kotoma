@@ -14,11 +14,13 @@ Live bilingual voice transcription TUI in Rust.
 - Other platforms / `--from-source`: Rust (stable) + CMake + a C/C++ toolchain
   (needed to build whisper.cpp)
 
-## Model tiers
+## Model presets
 
-Pick the tier that matches your machine.
+Models are kotoma's only heavy dependency. Two ready-made presets bundle an
+ASR + a translator model; pick one (or `both`, or any mix — see
+[Managing models](#managing-models)).
 
-| Tier | Whisper | Translator | Disk | RAM |
+| Preset | Whisper | Translator | Disk | RAM |
 |------|---------|------------|------|-----|
 | **standard** | `small` (500 MB) | Gemma 3 4B Q4_K_M (2.5 GB) | ~3 GB | ~4 GB |
 | **high** | `large-v3-turbo` (1.6 GB) | Gemma 3 12B Q4_K_M (7.3 GB) | ~9 GB | ~10 GB |
@@ -35,8 +37,8 @@ One command from anywhere — no clone needed:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash -s -- high
-# or
-curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash -s -- standard
+# or: standard · both · (omit the preset to install the binary only)
+curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash
 ```
 
 The installer always:
@@ -44,14 +46,10 @@ The installer always:
   `~/.local/bin/kotoma` (Apple Silicon macOS). Elsewhere — or with
   `--from-source` — it falls back to `cargo install --git … --force kotoma`.
 
-When you pass a **tier** (`standard` / `high`) it also sets up the models —
-otherwise the binary is installed alone and it prints guidance on the model
-dependency:
-- Downloads tier-appropriate models into `~/.config/kotoma/models/`
-  (skips anything already present).
-- Writes `~/.config/kotoma/kotoma.toml` from the tier example **only if
-  the file doesn't exist yet**. Pass `--reset-config` at the end to force
-  overwrite.
+When you pass a preset (`standard` / `high` / `both`) it then runs
+`kotoma model preset <name>` to download the models and write
+`~/.config/kotoma/kotoma.toml`. Omit the preset and the binary is installed
+alone, with guidance on setting up models afterwards.
 
 The models are kotoma's only heavy dependency; the binary itself updates
 independently of them (see [Update](#update)).
@@ -78,12 +76,15 @@ tiers. `kotoma model` works off an embedded catalog of known-good
 whisper.cpp / llama.cpp models:
 
 ```sh
-kotoma model list                       # catalog + what's installed/active
-kotoma model pull whisper-large-v3-turbo  # download into ~/.config/kotoma/models/
-kotoma model use  whisper-large-v3-turbo  # point kotoma.toml at it
-kotoma model rm   whisper-small           # delete a downloaded file
+kotoma model list                         # catalog + what's installed/active
+kotoma model preset both                  # install a whole preset (standard|high|both)
+kotoma model pull whisper-large-v3-turbo   # download one model into ~/.config/kotoma/models/
+kotoma model use  whisper-large-v3-turbo   # point kotoma.toml at it
+kotoma model rm   whisper-small            # delete a downloaded file
 ```
 
+`preset` downloads a bundle and writes the config (creating it from the
+template if missing); `both` installs everything and selects the high preset.
 `use` rewrites the relevant path in `~/.config/kotoma/kotoma.toml` (top-level
 `model_path` for ASR models, `[translator] model_path` for translators),
 preserving the rest of the file. Mixing tiers is fine — e.g. a large ASR model
@@ -100,11 +101,12 @@ with the 4B translator. You can still point the config at any compatible
 
 ### Manual setup
 
-If you prefer to drive it yourself, `kotoma.toml.standard.example` and
-`kotoma.toml.high.example` list the exact model paths expected. Download
-the corresponding models into `~/.config/kotoma/models/` and copy the
-example to `~/.config/kotoma/kotoma.toml`. Relative paths resolve against
-the config file's directory, so `models/foo` → `~/.config/kotoma/models/foo`.
+If you prefer to drive it yourself, copy `kotoma.toml.example` to
+`~/.config/kotoma/kotoma.toml` and point `model_path` (and, for translation,
+`[translator] model_path`) at the models you downloaded into
+`~/.config/kotoma/models/`. Relative paths resolve against the config file's
+directory, so `models/foo` → `~/.config/kotoma/models/foo`. `kotoma model
+list` / `pull` / `use` automate the same thing.
 
 To disable translation permanently, delete or comment out the `[translator]`
 section. To disable it for a single run, pass `--no-translate` — both take the

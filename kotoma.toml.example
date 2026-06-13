@@ -1,8 +1,10 @@
-# Copy to kotoma.toml and edit.
+# kotoma config. Copy to ~/.config/kotoma/kotoma.toml and edit.
+# `kotoma model use <name>` rewrites the model paths below for you.
 
 # --- ASR (Whisper) ---
-# Path to a ggml whisper model (see README for download).
-model_path = "models/ggml-large-v3-turbo.bin"
+# Path to a ggml whisper model. `kotoma model list` shows the options;
+# `kotoma model pull <name>` downloads one into models/.
+model_path = "models/ggml-small.bin"
 
 # Where the final Markdown transcript is written.
 output_path = "transcript.md"
@@ -37,7 +39,7 @@ max_segment_ms = 15000
 # Remove or comment out this section to disable translation.
 [translator]
 binary = "llama-server"
-model_path = "models/gemma-3-12b-it-Q4_K_M.gguf"
+model_path = "models/gemma-3-4b-it-Q4_K_M.gguf"
 port = 8787
 n_ctx = 8192
 max_new_tokens = 512

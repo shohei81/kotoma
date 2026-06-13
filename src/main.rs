@@ -22,7 +22,7 @@ const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", 
     about = "Live bilingual voice transcription TUI",
     after_help = "Commands:\n  \
         update [standard|high]  Update the kotoma binary in place; pass a tier to also refetch that model preset\n  \
-        model <list|pull|use|rm>  Manage local LLM models (run `kotoma model` to list)"
+        model <list|pull|use|preset|rm>  Manage local LLM models (run `kotoma model` to list)"
 )]
 struct Args {
     /// Output markdown file. Example: `kotoma notes.md`

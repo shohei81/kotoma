@@ -1,38 +1,36 @@
 #!/usr/bin/env bash
 # kotoma install / update — works both locally (cloned repo) and via curl | bash.
-# Rerun the same command to update; config is preserved unless --reset-config.
+# Installs the binary; local LLM models are managed separately via `kotoma model`.
 set -euo pipefail
 
 REPO_URL="https://github.com/shohei81/kotoma"
 RAW_URL="https://raw.githubusercontent.com/shohei81/kotoma/main"
 
 TIER=""
-RESET_CONFIG=0
 FROM_SOURCE=0
 
 print_usage() {
     cat <<EOF >&2
-usage: install.sh [standard|high] [--reset-config] [--from-source]
+usage: install.sh [standard|high|both] [--from-source]
 
 Installs/updates the kotoma binary. The local LLM models are a separate
-dependency — pass a tier to also fetch a model preset, or omit it to install
+dependency — pass a preset to also fetch its models, or omit it to install
 the binary only and follow the model guidance printed at the end.
 
   standard         Whisper small + Gemma 3 4B   (~3 GB disk, ~4 GB RAM)
   high             Whisper large-v3-turbo + Gemma 3 12B   (~9 GB disk, ~10 GB RAM)
-  --reset-config   Overwrite ~/.config/kotoma/kotoma.toml with the tier default
+  both             Both presets (selects high; switch with 'kotoma model use')
   --from-source    Skip the prebuilt binary and build with cargo
 
 Remote install / update:
-  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high   # binary + high-tier models
+  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high   # binary + high preset
   curl -fsSL ${RAW_URL}/install.sh | bash              # binary only
 EOF
 }
 
 for arg in "$@"; do
     case "$arg" in
-        standard|high) TIER="$arg" ;;
-        --reset-config) RESET_CONFIG=1 ;;
+        standard|high|both) TIER="$arg" ;;
         --from-source) FROM_SOURCE=1 ;;
         -h|--help) print_usage; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; print_usage; exit 1 ;;
@@ -45,8 +43,7 @@ if ! command -v llama-server >/dev/null 2>&1; then
 fi
 
 CONFIG_DIR="$HOME/.config/kotoma"
-MODEL_DIR="$CONFIG_DIR/models"
-mkdir -p "$MODEL_DIR"
+INSTALLED_BIN=""
 
 # Prebuilt binary (Apple Silicon macOS only, no Rust toolchain needed).
 # Falls back to cargo when unavailable.
@@ -61,7 +58,8 @@ try_binary_install() {
     mv "$tmp/kotoma" "$HOME/.local/bin/kotoma"
     chmod +x "$HOME/.local/bin/kotoma"
     rm -rf "$tmp"
-    echo "  installed prebuilt binary → $HOME/.local/bin/kotoma"
+    INSTALLED_BIN="$HOME/.local/bin/kotoma"
+    echo "  installed prebuilt binary → $INSTALLED_BIN"
     if ! command -v kotoma >/dev/null 2>&1; then
         echo "  NOTE: add ~/.local/bin to PATH, e.g.:"
         echo "        echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
@@ -79,71 +77,34 @@ else
     fi
     echo "  building from source via cargo (${REPO_URL})"
     cargo install --git "$REPO_URL" --force kotoma
+    INSTALLED_BIN="$(command -v kotoma || echo "$HOME/.cargo/bin/kotoma")"
 fi
 
-fetch() {
-    local url="$1"
-    local dest="$2"
-    if [[ -f "$dest" && -s "$dest" ]]; then
-        echo "  skip (already present): $(basename "$dest")"
-    else
-        echo "  downloading: $(basename "$dest")"
-        curl -fL --progress-bar -o "$dest" "$url"
-    fi
-}
-
-write_config() {
-    local example_name="$1"
-    local dest="$CONFIG_DIR/kotoma.toml"
-    if [[ -f "$dest" && $RESET_CONFIG -eq 0 ]]; then
-        echo "  keep existing: $dest (pass --reset-config to overwrite)"
-        return
-    fi
-    echo "  writing: $dest"
-    curl -fsSL -o "$dest" "${RAW_URL}/${example_name}"
-}
-
-# Models are a separate dependency: fetch a preset only when a tier is given,
-# otherwise leave the user's models untouched (this is the update path) and
-# guide them on what to install.
-if [[ "$TIER" == "standard" ]]; then
-    echo "==> Fetching standard-tier models"
-    fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
-          "$MODEL_DIR/ggml-small.bin"
-    fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
-          "$MODEL_DIR/gemma-3-4b-it-Q4_K_M.gguf"
-    echo "==> Config"
-    write_config "kotoma.toml.standard.example"
-elif [[ "$TIER" == "high" ]]; then
-    echo "==> Fetching high-tier models"
-    fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" \
-          "$MODEL_DIR/ggml-large-v3-turbo.bin"
-    fetch "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf" \
-          "$MODEL_DIR/gemma-3-12b-it-Q4_K_M.gguf"
-    echo "==> Config"
-    write_config "kotoma.toml.high.example"
+# Models are a separate dependency, owned by the binary's catalog-driven
+# `model preset` command. Only touch them when a preset was requested.
+if [[ -n "$TIER" ]]; then
+    echo "==> Installing the '$TIER' model preset"
+    "$INSTALLED_BIN" model preset "$TIER"
 fi
 
 echo ""
 echo "==> Done"
 if [[ -z "$TIER" ]]; then
-    if [[ ! -f "$CONFIG_DIR/kotoma.toml" ]] || ! ls "$MODEL_DIR"/ggml-*.bin >/dev/null 2>&1; then
+    if [[ ! -f "$CONFIG_DIR/kotoma.toml" ]] || ! ls "$CONFIG_DIR/models"/ggml-*.bin >/dev/null 2>&1; then
         cat <<EOF
 
-Binary installed. kotoma also needs local models (its only heavy dependency):
-  • ASR (required):    a whisper.cpp model, e.g. ggml-small.bin
-  • Translation (opt): a llama.cpp GGUF chat model + 'brew install llama.cpp'
+Binary installed. kotoma also needs local models (its only heavy dependency).
+Install a preset — downloads the models and writes the config:
+  kotoma model preset standard   # ~3 GB
+  kotoma model preset high       # ~9 GB
+  kotoma model preset both       # both; switch with 'kotoma model use'
 
-Fetch a ready-made preset and config:
-  curl -fsSL ${RAW_URL}/install.sh | bash -s -- standard   # ~3 GB
-  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high       # ~9 GB
-
-Models live in $MODEL_DIR and are referenced from $CONFIG_DIR/kotoma.toml.
+Or browse and pick individually: kotoma model list
 EOF
     fi
 else
     echo "    Config: $CONFIG_DIR/kotoma.toml"
-    echo "    Models: $MODEL_DIR"
+    echo "    Models: $CONFIG_DIR/models"
 fi
 echo ""
 echo "Run: kotoma notes.md"

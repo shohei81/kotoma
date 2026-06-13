@@ -6,13 +6,23 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const CATALOG_TOML: &str = include_str!("../models.toml");
+/// Base config written when `preset` runs and no kotoma.toml exists yet.
+const CONFIG_TEMPLATE: &str = include_str!("../kotoma.toml.example");
 
 #[derive(Deserialize)]
 struct Catalog {
     model: Vec<ModelEntry>,
+    #[serde(default)]
+    preset: BTreeMap<String, Preset>,
+}
+
+#[derive(Deserialize)]
+struct Preset {
+    models: Vec<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -41,12 +51,13 @@ pub fn run(args: &[String]) -> Result<()> {
         Some("pull") => pull(&catalog, args.get(1).map(String::as_str)),
         Some("use") => use_model(&catalog, args.get(1).map(String::as_str)),
         Some("rm") => rm(&catalog, args.get(1).map(String::as_str)),
+        Some("preset") => preset(&catalog, args.get(1).map(String::as_str)),
         Some("-h") | Some("--help") => {
             print_usage();
             Ok(())
         }
         Some(other) => {
-            bail!("unknown subcommand 'model {other}' (expected: list | pull | use | rm)")
+            bail!("unknown subcommand 'model {other}' (expected: list | pull | use | preset | rm)")
         }
     }
 }
@@ -57,6 +68,7 @@ fn print_usage() {
          list                 Show catalog models and which are installed/active\n  \
          pull <name>          Download a model into ~/.config/kotoma/models/\n  \
          use <name>           Point the config at an installed model\n  \
+         preset <name|both>   Install a tier preset (standard | high | both) and select it\n  \
          rm <name>            Delete a downloaded model file"
     );
 }
@@ -133,18 +145,16 @@ fn list(catalog: &Catalog) -> Result<()> {
     Ok(())
 }
 
-fn pull(catalog: &Catalog, name: Option<&str>) -> Result<()> {
-    let m = find(catalog, name)?;
-    let dir = models_dir()?;
-    std::fs::create_dir_all(&dir)?;
+/// Download one model into `dir`, skipping it if already present. Shells out
+/// to curl for a progress bar and resilient large-file handling, like
+/// install.sh.
+fn download(m: &ModelEntry, dir: &std::path::Path) -> Result<()> {
     let dest = dir.join(&m.file);
     if dest.exists() && std::fs::metadata(&dest).map(|md| md.len() > 0).unwrap_or(false) {
-        println!("already present: {}", dest.display());
+        println!("already present: {}", m.name);
         return Ok(());
     }
     println!("==> Downloading {} ({})", m.name, m.size);
-    // Shell out to curl for a progress bar and resilient large-file handling,
-    // matching install.sh.
     let status = std::process::Command::new("curl")
         .args(["-fL", "--progress-bar", "-o"])
         .arg(&dest)
@@ -154,38 +164,16 @@ fn pull(catalog: &Catalog, name: Option<&str>) -> Result<()> {
     if !status.success() {
         // Don't leave a truncated file behind.
         let _ = std::fs::remove_file(&dest);
-        bail!("download failed (curl exited with {status})");
+        bail!("download failed for {} (curl exited with {status})", m.name);
     }
     println!("installed → {}", dest.display());
-    println!("activate with: kotoma model use {}", m.name);
     Ok(())
 }
 
-fn use_model(catalog: &Catalog, name: Option<&str>) -> Result<()> {
-    let m = find(catalog, name)?;
-    let dir = models_dir()?;
-    if !dir.join(&m.file).exists() {
-        bail!(
-            "'{}' is not downloaded yet — run `kotoma model pull {}` first",
-            m.name,
-            m.name
-        );
-    }
-
-    let path = config_path()?;
-    if !path.exists() {
-        bail!(
-            "no config at {} — run `install.sh standard|high` once to create it",
-            path.display()
-        );
-    }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let mut doc = text
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-
-    // Store relative to the config dir, matching the example configs.
+/// Point the config doc at `m` (top-level `model_path` for ASR, the
+/// `[translator]` table for translators), creating the section if needed.
+fn apply_active(doc: &mut toml_edit::DocumentMut, m: &ModelEntry) {
+    // Store relative to the config dir, matching the example config.
     let rel = format!("models/{}", m.file);
     if m.is_asr() {
         doc["model_path"] = toml_edit::value(rel);
@@ -197,11 +185,113 @@ fn use_model(catalog: &Catalog, name: Option<&str>) -> Result<()> {
         }
         doc["translator"]["model_path"] = toml_edit::value(rel);
     }
+}
 
-    std::fs::write(&path, doc.to_string())
-        .with_context(|| format!("writing {}", path.display()))?;
+fn read_config_doc(path: &std::path::Path) -> Result<toml_edit::DocumentMut> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    text.parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))
+}
+
+fn write_config_doc(path: &std::path::Path, doc: &toml_edit::DocumentMut) -> Result<()> {
+    std::fs::write(path, doc.to_string())
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn pull(catalog: &Catalog, name: Option<&str>) -> Result<()> {
+    let m = find(catalog, name)?;
+    let dir = models_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    download(m, &dir)?;
+    println!("activate with: kotoma model use {}", m.name);
+    Ok(())
+}
+
+fn use_model(catalog: &Catalog, name: Option<&str>) -> Result<()> {
+    let m = find(catalog, name)?;
+    if !models_dir()?.join(&m.file).exists() {
+        bail!(
+            "'{}' is not downloaded yet — run `kotoma model pull {}` first",
+            m.name,
+            m.name
+        );
+    }
+    let path = config_path()?;
+    if !path.exists() {
+        bail!(
+            "no config at {} — run `kotoma model preset standard|high` to create one",
+            path.display()
+        );
+    }
+    let mut doc = read_config_doc(&path)?;
+    apply_active(&mut doc, m);
+    write_config_doc(&path, &doc)?;
     let role = if m.is_asr() { "ASR" } else { "translation" };
     println!("{} model set to {} in {}", role, m.name, path.display());
+    Ok(())
+}
+
+fn preset(catalog: &Catalog, name: Option<&str>) -> Result<()> {
+    let known = || {
+        catalog
+            .preset
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let name = name.ok_or_else(|| anyhow!("missing preset name ({} | both)", known()))?;
+
+    // Which presets to install. `both`/`all` means every catalog preset.
+    let selected: Vec<&str> = match name {
+        "both" | "all" => catalog.preset.keys().map(String::as_str).collect(),
+        other if catalog.preset.contains_key(other) => vec![other],
+        other => bail!("unknown preset '{other}' (expected: {} | both)", known()),
+    };
+
+    let lookup = |mname: &str| {
+        catalog
+            .model
+            .iter()
+            .find(|m| m.name == mname)
+            .ok_or_else(|| anyhow!("preset references unknown model '{mname}'"))
+    };
+
+    let dir = models_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    for pname in &selected {
+        for mname in &catalog.preset[*pname].models {
+            download(lookup(mname)?, &dir)?;
+        }
+    }
+
+    // When installing several presets, activate the strongest (high) one;
+    // otherwise activate the one requested.
+    let active = if selected.contains(&"high") {
+        "high"
+    } else {
+        selected[selected.len() - 1]
+    };
+
+    std::fs::create_dir_all(config_dir()?)?;
+    let path = config_path()?;
+    let mut doc = if path.exists() {
+        read_config_doc(&path)?
+    } else {
+        CONFIG_TEMPLATE
+            .parse::<toml_edit::DocumentMut>()
+            .context("parsing embedded config template")?
+    };
+    for mname in &catalog.preset[active].models {
+        apply_active(&mut doc, lookup(mname)?);
+    }
+    write_config_doc(&path, &doc)?;
+
+    println!("\nconfig at {} now uses the '{}' preset", path.display(), active);
+    if selected.len() > 1 {
+        println!("both presets downloaded — switch anytime with `kotoma model use <name>`");
+    }
     Ok(())
 }
 
