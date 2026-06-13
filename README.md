@@ -71,6 +71,25 @@ binary is a `cargo install` one (`~/.cargo/bin`), otherwise downloading the
 latest prebuilt binary. Running the original `curl … | bash` command (with or
 without a tier) does the same thing.
 
+### Managing models
+
+Models are the only heavy dependency, and you pick them independently of the
+tiers. `kotoma model` works off an embedded catalog of known-good
+whisper.cpp / llama.cpp models:
+
+```sh
+kotoma model list                       # catalog + what's installed/active
+kotoma model pull whisper-large-v3-turbo  # download into ~/.config/kotoma/models/
+kotoma model use  whisper-large-v3-turbo  # point kotoma.toml at it
+kotoma model rm   whisper-small           # delete a downloaded file
+```
+
+`use` rewrites the relevant path in `~/.config/kotoma/kotoma.toml` (top-level
+`model_path` for ASR models, `[translator] model_path` for translators),
+preserving the rest of the file. Mixing tiers is fine — e.g. a large ASR model
+with the 4B translator. You can still point the config at any compatible
+`ggml-*.bin` / `*.gguf` by hand; the catalog is just a convenience.
+
 ### From a cloned repo (dev)
 
 ```sh

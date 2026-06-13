@@ -1,0 +1,38 @@
+# kotoma model catalog — the single source of truth for `kotoma model`.
+# Embedded into the binary at build time, so `kotoma update` ships the latest
+# catalog. Add an entry here to make a model pullable; no code change needed.
+#
+# role: "asr"        → whisper.cpp ggml model (sets top-level model_path)
+#       "translator" → llama.cpp GGUF chat model (sets [translator] model_path)
+
+[[model]]
+name = "whisper-small"
+role = "asr"
+file = "ggml-small.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+size = "~500 MB"
+note = "standard tier — fast, lower accuracy"
+
+[[model]]
+name = "whisper-large-v3-turbo"
+role = "asr"
+file = "ggml-large-v3-turbo.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+size = "~1.6 GB"
+note = "high tier — best ASR accuracy"
+
+[[model]]
+name = "gemma-3-4b"
+role = "translator"
+file = "gemma-3-4b-it-Q4_K_M.gguf"
+url = "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf"
+size = "~2.5 GB"
+note = "standard tier — comfortable on 8–16 GB Macs"
+
+[[model]]
+name = "gemma-3-12b"
+role = "translator"
+file = "gemma-3-12b-it-Q4_K_M.gguf"
+url = "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf"
+size = "~7.3 GB"
+note = "high tier — best JA ↔ EN, needs ~32 GB RAM"

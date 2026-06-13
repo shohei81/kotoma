@@ -3,6 +3,7 @@ mod audio;
 mod config;
 mod filter;
 mod markdown;
+mod model;
 mod msg;
 mod transcribe;
 mod translate;
@@ -19,7 +20,9 @@ const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", 
 #[command(
     version,
     about = "Live bilingual voice transcription TUI",
-    after_help = "Commands:\n  update [standard|high]  Update the kotoma binary in place; pass a tier to also refetch that model preset"
+    after_help = "Commands:\n  \
+        update [standard|high]  Update the kotoma binary in place; pass a tier to also refetch that model preset\n  \
+        model <list|pull|use|rm>  Manage local LLM models (run `kotoma model` to list)"
 )]
 struct Args {
     /// Output markdown file. Example: `kotoma notes.md`
@@ -59,6 +62,9 @@ fn main() -> Result<()> {
     let raw: Vec<String> = std::env::args().collect();
     if raw.get(1).map(String::as_str) == Some("update") {
         return run_update(raw.get(2).map(String::as_str));
+    }
+    if raw.get(1).map(String::as_str) == Some("model") {
+        return model::run(&raw[2..]);
     }
 
     let args = Args::parse();
