@@ -212,8 +212,17 @@ fn run_loop(
     let mut layout = TranscriptLayout::new();
     // Redraw only when something visible changed — a constant 20 fps repaint
     // of an idle screen wastes CPU and battery.
+    //
+    // The audio gauge animates continuously, so naively redrawing on every
+    // level change repaints the whole TUI at the 20 Hz poll rate and keeps the
+    // terminal + window compositor busy (and the machine warm) the entire
+    // session — even ambient mic noise flickers the level. So: quantise the
+    // gauge (deadband) so silence is genuinely idle, and throttle gauge-only
+    // repaints to ~10 Hz. Discrete changes (new line, keypress, …) redraw at once.
     let mut needs_redraw = true;
-    let mut last_gauge_pct = u16::MAX;
+    let mut last_gauge_bucket = u16::MAX;
+    let mut last_draw = std::time::Instant::now();
+    const GAUGE_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
     loop {
         while let Ok(msg) = ui_rx.try_recv() {
@@ -237,14 +246,21 @@ fn run_loop(
             draft = d;
             needs_redraw = true;
         }
-        let gauge_pct = (level_smooth * 400.0).clamp(0.0, 100.0) as u16;
-        if gauge_pct != last_gauge_pct {
-            needs_redraw = true;
-        }
+        // Deadband: sub-1% levels (ambient noise) read as zero, then bucket to
+        // 4% steps so tiny fluctuations don't each trigger a repaint.
+        let gauge_pct = if level_smooth < 0.0025 {
+            0
+        } else {
+            (level_smooth * 400.0).clamp(0.0, 100.0) as u16
+        };
+        let gauge_bucket = gauge_pct / 4;
+        let gauge_due =
+            gauge_bucket != last_gauge_bucket && last_draw.elapsed() >= GAUGE_MIN_INTERVAL;
 
-        if needs_redraw {
+        if needs_redraw || gauge_due {
             needs_redraw = false;
-            last_gauge_pct = gauge_pct;
+            last_gauge_bucket = gauge_bucket;
+            last_draw = std::time::Instant::now();
             let lang = language.read().map(|g| g.clone()).unwrap_or_default();
             let is_recording = !paused.load(Ordering::Relaxed);
             terminal.draw(|f| {

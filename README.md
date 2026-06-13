@@ -268,7 +268,9 @@ kotoma model use whisper-large-v3-turbo-q5_0   # ~1/3 size, a touch more loss
 
 The UI only re-renders when something changed and only wraps the lines
 visible in the viewport, so idle CPU usage is near zero and scrolling stays
-smooth in long sessions.
+smooth in long sessions. The audio level meter is deadbanded and its repaints
+throttled to ~10 Hz, so ambient noise doesn't keep the terminal and window
+compositor busy when nothing is being said.
 
 Note: the translator now launches `llama-server` with `--jinja` (uses the
 GGUF's bundled chat template), which requires a llama.cpp release from 2025
