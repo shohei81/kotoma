@@ -39,32 +39,37 @@ curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | b
 curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash -s -- standard
 ```
 
-The installer:
+The installer always:
 - Downloads the latest prebuilt binary from GitHub Releases into
   `~/.local/bin/kotoma` (Apple Silicon macOS). Elsewhere — or with
   `--from-source` — it falls back to `cargo install --git … --force kotoma`.
+
+When you pass a **tier** (`standard` / `high`) it also sets up the models —
+otherwise the binary is installed alone and it prints guidance on the model
+dependency:
 - Downloads tier-appropriate models into `~/.config/kotoma/models/`
   (skips anything already present).
 - Writes `~/.config/kotoma/kotoma.toml` from the tier example **only if
   the file doesn't exist yet**. Pass `--reset-config` at the end to force
   overwrite.
 
+The models are kotoma's only heavy dependency; the binary itself updates
+independently of them (see [Update](#update)).
+
 ### Update
 
-Run the exact same command — it swaps in the latest binary (or rebuilds
-from `main` when building from source). Existing models and your edited
-config are preserved.
-
-Or, from an already-installed kotoma:
+Updates target the **binary**; your models and edited config are a separate
+dependency and are never touched. From an already-installed kotoma:
 
 ```sh
-kotoma update          # tier inferred from installed models
-kotoma update high     # force a tier
+kotoma update          # update the binary only
+kotoma update high     # also (re)fetch the high-tier model preset
 ```
 
 This re-runs `install.sh` for you — building from source when the current
 binary is a `cargo install` one (`~/.cargo/bin`), otherwise downloading the
-latest prebuilt binary.
+latest prebuilt binary. Running the original `curl … | bash` command (with or
+without a tier) does the same thing.
 
 ### From a cloned repo (dev)
 

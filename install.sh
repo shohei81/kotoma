@@ -12,7 +12,11 @@ FROM_SOURCE=0
 
 print_usage() {
     cat <<EOF >&2
-usage: install.sh {standard|high} [--reset-config] [--from-source]
+usage: install.sh [standard|high] [--reset-config] [--from-source]
+
+Installs/updates the kotoma binary. The local LLM models are a separate
+dependency — pass a tier to also fetch a model preset, or omit it to install
+the binary only and follow the model guidance printed at the end.
 
   standard         Whisper small + Gemma 3 4B   (~3 GB disk, ~4 GB RAM)
   high             Whisper large-v3-turbo + Gemma 3 12B   (~9 GB disk, ~10 GB RAM)
@@ -20,7 +24,8 @@ usage: install.sh {standard|high} [--reset-config] [--from-source]
   --from-source    Skip the prebuilt binary and build with cargo
 
 Remote install / update:
-  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high
+  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high   # binary + high-tier models
+  curl -fsSL ${RAW_URL}/install.sh | bash              # binary only
 EOF
 }
 
@@ -33,11 +38,6 @@ for arg in "$@"; do
         *) echo "unknown argument: $arg" >&2; print_usage; exit 1 ;;
     esac
 done
-
-if [[ -z "$TIER" ]]; then
-    print_usage
-    exit 1
-fi
 
 if ! command -v llama-server >/dev/null 2>&1; then
     echo "NOTE: llama-server not found on PATH — translation will be disabled."
@@ -103,6 +103,9 @@ write_config() {
     curl -fsSL -o "$dest" "${RAW_URL}/${example_name}"
 }
 
+# Models are a separate dependency: fetch a preset only when a tier is given,
+# otherwise leave the user's models untouched (this is the update path) and
+# guide them on what to install.
 if [[ "$TIER" == "standard" ]]; then
     echo "==> Fetching standard-tier models"
     fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
@@ -111,7 +114,7 @@ if [[ "$TIER" == "standard" ]]; then
           "$MODEL_DIR/gemma-3-4b-it-Q4_K_M.gguf"
     echo "==> Config"
     write_config "kotoma.toml.standard.example"
-else
+elif [[ "$TIER" == "high" ]]; then
     echo "==> Fetching high-tier models"
     fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" \
           "$MODEL_DIR/ggml-large-v3-turbo.bin"
@@ -123,7 +126,24 @@ fi
 
 echo ""
 echo "==> Done"
-echo "    Config: $CONFIG_DIR/kotoma.toml"
-echo "    Models: $MODEL_DIR"
+if [[ -z "$TIER" ]]; then
+    if [[ ! -f "$CONFIG_DIR/kotoma.toml" ]] || ! ls "$MODEL_DIR"/ggml-*.bin >/dev/null 2>&1; then
+        cat <<EOF
+
+Binary installed. kotoma also needs local models (its only heavy dependency):
+  • ASR (required):    a whisper.cpp model, e.g. ggml-small.bin
+  • Translation (opt): a llama.cpp GGUF chat model + 'brew install llama.cpp'
+
+Fetch a ready-made preset and config:
+  curl -fsSL ${RAW_URL}/install.sh | bash -s -- standard   # ~3 GB
+  curl -fsSL ${RAW_URL}/install.sh | bash -s -- high       # ~9 GB
+
+Models live in $MODEL_DIR and are referenced from $CONFIG_DIR/kotoma.toml.
+EOF
+    fi
+else
+    echo "    Config: $CONFIG_DIR/kotoma.toml"
+    echo "    Models: $MODEL_DIR"
+fi
 echo ""
 echo "Run: kotoma notes.md"

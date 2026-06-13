@@ -19,7 +19,7 @@ const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", 
 #[command(
     version,
     about = "Live bilingual voice transcription TUI",
-    after_help = "Commands:\n  update [standard|high]  Update kotoma in place (re-runs install.sh)"
+    after_help = "Commands:\n  update [standard|high]  Update the kotoma binary in place; pass a tier to also refetch that model preset"
 )]
 struct Args {
     /// Output markdown file. Example: `kotoma notes.md`
@@ -103,17 +103,14 @@ fn main() -> Result<()> {
     app::run(cfg, existing)
 }
 
-/// Re-run install.sh to update the binary (and refresh any missing models).
-/// `tier` comes from the CLI; if omitted we infer it from the installed models,
-/// since install.sh requires an explicit standard|high.
+/// Re-run install.sh to update the binary in place. Models are a separate
+/// dependency and are left untouched; pass an explicit tier only if you also
+/// want to (re)fetch that preset's models.
 fn run_update(tier: Option<&str>) -> Result<()> {
     let tier = match tier {
-        Some(t @ ("standard" | "high")) => t.to_string(),
+        Some(t @ ("standard" | "high")) => Some(t),
         Some(other) => bail!("unknown tier '{other}' (expected: standard | high)"),
-        None => infer_tier()
-            .ok_or_else(|| anyhow::anyhow!(
-                "could not infer the model tier — run `kotoma update standard` or `kotoma update high`"
-            ))?,
+        None => None,
     };
 
     // Match the binary we're replacing: a cargo-installed kotoma lives under
@@ -124,12 +121,20 @@ fn run_update(tier: Option<&str>) -> Result<()> {
         .and_then(|p| p.to_str().map(|s| s.contains("/.cargo/")))
         .unwrap_or(false);
 
-    let mut script = format!("curl -fsSL '{INSTALL_URL}' | bash -s -- {tier}");
+    let mut script = format!("curl -fsSL '{INSTALL_URL}' | bash -s --");
+    if let Some(t) = tier {
+        script.push(' ');
+        script.push_str(t);
+    }
     if from_source {
         script.push_str(" --from-source");
     }
 
-    println!("==> Updating kotoma (tier={tier}{})", if from_source { ", from source" } else { "" });
+    println!(
+        "==> Updating kotoma binary{}{}",
+        tier.map(|t| format!(" (+ {t} models)")).unwrap_or_default(),
+        if from_source { ", from source" } else { "" }
+    );
     let status = std::process::Command::new("bash")
         .arg("-c")
         .arg(&script)
@@ -138,18 +143,6 @@ fn run_update(tier: Option<&str>) -> Result<()> {
         bail!("update failed (install.sh exited with {status})");
     }
     Ok(())
-}
-
-/// Guess the installed tier from the whisper model present in the config dir.
-fn infer_tier() -> Option<String> {
-    let models = dirs::home_dir()?.join(".config/kotoma/models");
-    if models.join("ggml-large-v3-turbo.bin").exists() {
-        Some("high".to_string())
-    } else if models.join("ggml-small.bin").exists() {
-        Some("standard".to_string())
-    } else {
-        None
-    }
 }
 
 fn normalize_output_path(path: PathBuf) -> Result<PathBuf> {
