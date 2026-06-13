@@ -40,7 +40,11 @@ impl TranscribeRunner {
         threads: i32,
         language: Arc<RwLock<String>>,
     ) -> Result<Self> {
-        let params = WhisperContextParameters::default();
+        let mut params = WhisperContextParameters::default();
+        // Flash attention cuts the encoder's memory traffic and compute on
+        // Metal — faster inference and noticeably less heat, with no quality
+        // cost. Safe here because we don't use DTW token timestamps.
+        params.flash_attn(true);
         let path_str = model_path.to_str().context("model path is not valid UTF-8")?;
         let ctx = WhisperContext::new_with_params(path_str, params)
             .with_context(|| format!("loading whisper model at {}", model_path.display()))?;

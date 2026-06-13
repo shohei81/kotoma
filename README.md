@@ -257,6 +257,15 @@ On a 32 GB M4 MacBook Air with the recommended stack:
 
 For lighter setups: use `ggml-small.bin` + gemma-3-4b-it-Q4_K_M.
 
+Whisper runs with flash attention on Metal (faster, cooler, no quality cost).
+If the machine still runs hot during long transcription, switch to a quantized
+turbo model — same accuracy class at a third to half the compute/heat:
+
+```sh
+kotoma model use whisper-large-v3-turbo-q8_0   # ~half size, near-zero loss
+kotoma model use whisper-large-v3-turbo-q5_0   # ~1/3 size, a touch more loss
+```
+
 The UI only re-renders when something changed and only wraps the lines
 visible in the viewport, so idle CPU usage is near zero and scrolling stays
 smooth in long sessions.

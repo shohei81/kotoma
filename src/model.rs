@@ -138,7 +138,7 @@ fn list(catalog: &Catalog) -> Result<()> {
                 (true, false) => "✓ installed",
                 (false, _) => "  available",
             };
-            println!("  {tag}  {:<24} {:>8}  {}", m.name, m.size, m.note);
+            println!("  {tag}  {:<28} {:>8}  {}", m.name, m.size, m.note);
         }
     }
     println!("\n  pull: kotoma model pull <name>   ·   use: kotoma model use <name>");
