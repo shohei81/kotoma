@@ -45,9 +45,9 @@ struct Args {
     #[arg(short = 'r', long)]
     resume: bool,
 
-    /// Skip the 要約/Summary sections on quit (transcription-only output).
+    /// Generate 要約/Summary sections on quit (off by default).
     #[arg(long)]
-    no_summary: bool,
+    summary: bool,
 
     /// Disable translation for this run; transcribe only (skips llama-server).
     #[arg(long)]
@@ -87,9 +87,9 @@ fn main() -> Result<()> {
     if args.no_translate {
         cfg.translator = None;
     }
-    if args.no_summary {
+    if args.summary {
         if let Some(t) = cfg.translator.as_mut() {
-            t.summarize = false;
+            t.summarize = true;
         }
     }
     cfg.log_dir = log_dir;

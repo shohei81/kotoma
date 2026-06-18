@@ -213,7 +213,7 @@ pub fn draw(f: &mut Frame, state: &UiState, layout: &mut TranscriptLayout) {
 
 fn render_help_overlay(f: &mut Frame) {
     const ROWS: &[(&str, &str)] = &[
-        ("q / Ctrl+C", "Save & quit (+ 要約/Summary)"),
+        ("q / Ctrl+C", "Save & quit"),
         ("s", "Save now"),
         ("l", "Cycle language (en → ja → auto)"),
         ("space", "Pause / resume capture"),
