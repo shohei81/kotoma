@@ -164,9 +164,16 @@ fn run(
             };
             let id = line.id;
             match translate_once(cfg, &line, &context) {
-                Ok(translated) if !translated.is_empty() => {
+                Ok((translated, off_target)) if !translated.is_empty() => {
                     debug!(id, text = %translated, "translation complete");
-                    context.push(&line.src_lang, &line.text, &translated);
+                    // Caching an off-target line would feed it back as a
+                    // few-shot example and make the leak self-perpetuate —
+                    // show it once, but don't let it poison the context.
+                    if off_target {
+                        warn!(id, text = %translated, "off-target output — not caching to context");
+                    } else {
+                        context.push(&line.src_lang, &line.text, &translated);
+                    }
                     let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
                     restarts = 0;
                 }
@@ -238,7 +245,7 @@ Rules:\n\
         "You are a professional simultaneous interpreter translating from English to Japanese.\n\
 Rules:\n\
 - Output ONLY the translation. No explanations, no quotes, no prefixes.\n\
-- The output MUST be written in Japanese only. Never output Simplified or Traditional Chinese. Use hiragana, katakana, and Japanese-style kanji; do NOT output Chinese-only characters or Pinyin.\n\
+- The output MUST be written in Japanese only. Never output Korean (Hangul), Simplified or Traditional Chinese. Use hiragana, katakana, and Japanese-style kanji; do NOT output Hangul, Chinese-only characters, or Pinyin.\n\
 - If the input is a sentence fragment (no period, cut mid-thought), translate it as a fragment. Do NOT pad or complete.\n\
 - Preserve tone: formal stays formal, casual stays casual.\n\
 - Keep proper nouns, technical terms, and numbers exact.\n\
@@ -260,8 +267,23 @@ const SIMPLIFIED_ONLY: &[char] = &[
     '过', '别', '帮', '请',
 ];
 
-/// Heuristic: a "Japanese" output that is actually Chinese.
-fn looks_like_chinese(target_is_ja: bool, text: &str) -> bool {
+/// Any Hangul (syllables, conjoining/compatibility Jamo) — Korean never belongs
+/// in either translation direction, so it is always a leak.
+fn has_hangul(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c as u32,
+            0xAC00..=0xD7A3 | 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xD7B0..=0xD7FF)
+    })
+}
+
+/// Heuristic: the output is in the wrong language for the target. Catches
+/// Korean (Hangul) in either direction and Chinese in the Japanese direction.
+fn looks_off_target(target_is_ja: bool, text: &str) -> bool {
+    // A Korean leak self-perpetuates once it enters the context history, so
+    // flag it regardless of direction.
+    if has_hangul(text) {
+        return true;
+    }
     if !target_is_ja {
         return false;
     }
@@ -309,11 +331,14 @@ fn chat_request(
     Ok(text)
 }
 
+/// Returns `(text, off_target)`. `off_target` is true when the text is still in
+/// the wrong language after the corrective retry — the caller must keep it out
+/// of the context history so the leak does not become a few-shot example.
 fn translate_once(
     cfg: &TranslatorConfig,
     line: &TranscriptLine,
     context: &ContextWindow,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let target_is_ja = line.src_lang != "ja";
 
     // Static system prompt + history as real chat turns. The system prompt
@@ -334,24 +359,27 @@ fn translate_once(
     let msgs = serde_json::Value::Array(messages.clone());
     let text = chat_request(cfg.port, &msgs, cap, 0.2)?;
 
-    if !looks_like_chinese(target_is_ja, &text) {
-        return Ok(text);
+    if !looks_off_target(target_is_ja, &text) {
+        return Ok((text, false));
     }
 
     // One corrective retry: keep the cached prefix intact and append the bad
     // answer + a fix-it turn. Higher temperature breaks the greedy-decoding rut.
-    warn!(id = line.id, text = %text, "Chinese leak detected — retrying");
+    warn!(id = line.id, text = %text, "off-target language leak detected — retrying");
+    let fix = if target_is_ja {
+        "That was not Japanese. Rewrite it as natural Japanese using hiragana, katakana, and Japanese kanji — never Korean or Chinese. Output only the Japanese translation."
+    } else {
+        "That was not English. Rewrite it as natural English. Output only the English translation."
+    };
     messages.push(serde_json::json!({"role": "assistant", "content": text}));
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": "That was Chinese, not Japanese. Rewrite it as natural Japanese using hiragana, katakana, and Japanese kanji. Output only the Japanese translation."
-    }));
+    messages.push(serde_json::json!({"role": "user", "content": fix}));
     let msgs = serde_json::Value::Array(messages);
     let retry = chat_request(cfg.port, &msgs, cap, 0.7)?;
     if retry.is_empty() {
-        return Ok(text);
+        return Ok((text, true));
     }
-    Ok(retry)
+    let still_off = looks_off_target(target_is_ja, &retry);
+    Ok((retry, still_off))
 }
 
 /// Tail of the transcript fed to the summarizer — must stay well inside the
