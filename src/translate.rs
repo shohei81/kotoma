@@ -175,7 +175,6 @@ fn run(
                         context.push(&line.src_lang, &line.text, &translated);
                     }
                     let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
-                    restarts = 0;
                 }
                 Ok(_) => {
                     debug!(id, "empty translation");
@@ -298,7 +297,9 @@ fn looks_off_target(target_is_ja: bool, text: &str) -> bool {
         .filter(|c| matches!(*c as u32, 0x4E00..=0x9FFF))
         .count();
     // Real Japanese sentences of any length virtually always contain kana.
-    !has_kana && han >= 6
+    // Threshold of 10 avoids false-positives on kanji-heavy proper nouns
+    // such as "東京都知事選挙" (7 chars) while still catching Chinese prose.
+    !has_kana && han >= 10
 }
 
 fn chat_request(
@@ -376,7 +377,7 @@ fn translate_once(
     let msgs = serde_json::Value::Array(messages);
     let retry = chat_request(cfg.port, &msgs, cap, 0.7)?;
     if retry.is_empty() {
-        return Ok((text, true));
+        return Ok((String::new(), false));
     }
     let still_off = looks_off_target(target_is_ja, &retry);
     Ok((retry, still_off))
@@ -460,6 +461,17 @@ mod tests {
     #[test]
     fn english_target_never_flags() {
         assert!(!looks_off_target(false, "我们说这个"));
+    }
+
+    #[test]
+    fn kanji_only_proper_noun_not_flagged() {
+        assert!(!looks_off_target(true, "東京都知事選挙"));
+    }
+
+    #[test]
+    fn hangul_always_flags_regardless_of_direction() {
+        assert!(looks_off_target(true, "안녕하세요"));
+        assert!(looks_off_target(false, "안녕하세요"));
     }
 
     #[test]
