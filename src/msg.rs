@@ -27,10 +27,13 @@ pub struct DraftState {
 pub fn detect_lang(text: &str) -> &'static str {
     let has_cjk = text.chars().any(|c| {
         let n = c as u32;
-        (0x3040..=0x309F).contains(&n)
-            || (0x30A0..=0x30FF).contains(&n)
-            || (0x4E00..=0x9FFF).contains(&n)
-            || (0xFF66..=0xFF9D).contains(&n)
+        (0x3040..=0x309F).contains(&n)   // Hiragana
+            || (0x30A0..=0x30FF).contains(&n) // Katakana
+            || (0x4E00..=0x9FFF).contains(&n) // CJK Unified Ideographs
+            || (0xFF66..=0xFF9D).contains(&n) // Halfwidth Katakana
+            || (0xAC00..=0xD7A3).contains(&n) // Hangul Syllables
+            || (0x1100..=0x11FF).contains(&n) // Hangul Jamo
+            || (0x3130..=0x318F).contains(&n) // Hangul Compatibility Jamo
     });
     if has_cjk {
         "ja"
@@ -61,5 +64,10 @@ mod tests {
     #[test]
     fn mixed_with_kana_is_ja() {
         assert_eq!(detect_lang("OKです"), "ja");
+    }
+
+    #[test]
+    fn hangul_is_ja() {
+        assert_eq!(detect_lang("안녕하세요"), "ja");
     }
 }
