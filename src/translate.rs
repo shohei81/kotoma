@@ -448,18 +448,18 @@ mod tests {
 
     #[test]
     fn simplified_chars_flag_chinese_leak() {
-        assert!(looks_like_chinese(true, "我们说这个"));
-        assert!(!looks_like_chinese(true, "私たちはこれについて話します"));
+        assert!(looks_off_target(true, "我们说这个"));
+        assert!(!looks_off_target(true, "私たちはこれについて話します"));
     }
 
     #[test]
     fn kana_free_long_han_run_is_suspicious() {
-        assert!(looks_like_chinese(true, "今天天气很好我想去公园散步"));
+        assert!(looks_off_target(true, "今天天气很好我想去公园散步"));
     }
 
     #[test]
     fn english_target_never_flags() {
-        assert!(!looks_like_chinese(false, "我们说这个"));
+        assert!(!looks_off_target(false, "我们说这个"));
     }
 
     #[test]
