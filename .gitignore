@@ -23,8 +23,6 @@ target
 # kotoma local artifacts
 /kotoma.toml
 /kotoma.log
-/livemd.toml
-/livemd.log
 /llama-server.log
 /transcript.md
 /models/

@@ -3,7 +3,7 @@
 Live bilingual voice transcription TUI in Rust.
 
 - **ASR**: `cpal` → `webrtc-vad` → `whisper.cpp` (Metal) via `whisper-rs`
-- **Translation** (optional): Gemma 3 via `llama-server` subprocess (Metal), queried over HTTP (OpenAI-compatible `/v1/chat/completions`)
+- **Translation** (optional): Gemma 4 via `llama-server` subprocess (Metal), queried over HTTP (OpenAI-compatible `/v1/chat/completions`)
 - **UI**: `ratatui` two-column display (English ↔ 日本語)
 - **Output**: timestamped Markdown table
 
@@ -22,14 +22,14 @@ ASR + a translator model; pick one (or `both`, or any mix — see
 
 | Preset | Whisper | Translator | Disk | RAM |
 |------|---------|------------|------|-----|
-| **standard** | `small` (500 MB) | Gemma 3 4B Q4_K_M (2.5 GB) | ~3 GB | ~4 GB |
-| **high** | `large-v3-turbo` (1.6 GB) | Gemma 3 12B Q4_K_M (7.3 GB) | ~9 GB | ~10 GB |
+| **standard** | `small` (500 MB) | Gemma 4 E4B Q4_K_M (5.3 GB) | ~6 GB | ~8 GB |
+| **high** | `large-v3-turbo` (1.6 GB) | Gemma 4 12B Q4_K_M (7.4 GB) | ~9 GB | ~12 GB |
 
 - **standard** is comfortable on any 8–16 GB M-series Mac.
-- **high** shines on 32 GB Macs and produces noticeably better JA ↔ EN translation
+- **high** shines on 16–32 GB Macs and produces noticeably better JA ↔ EN translation
   and ASR accuracy.
-- Gemma 3 is strong at Japanese and, unlike the previously bundled Qwen2.5,
-  does not tend to leak Chinese into JA output.
+- Gemma 4 improves on Japanese translation stability and instruction-following
+  compared to Gemma 3.
 
 ## Install / update
 
@@ -154,9 +154,6 @@ kotoma -c ./project-specific.toml notes.md
 1. `-c / --config` CLI flag (if given)
 2. `./kotoma.toml` in the current directory
 3. `~/.config/kotoma/kotoma.toml`
-
-Legacy `livemd.toml` paths (from previous versions) are still picked up as a
-fallback if no `kotoma.toml` is present.
 
 ### Log location
 

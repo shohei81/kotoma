@@ -173,16 +173,11 @@ fn normalize_output_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 fn log_dir_path() -> PathBuf {
-    if let Ok(v) = std::env::var("KOTOMA_LOG_DIR").or_else(|_| std::env::var("LIVEMD_LOG_DIR")) {
+    if let Ok(v) = std::env::var("KOTOMA_LOG_DIR") {
         return PathBuf::from(v);
     }
     if let Some(home) = dirs::home_dir() {
-        let new_dir = home.join(".config/kotoma/logs");
-        let legacy = home.join(".config/livemd/logs");
-        if !new_dir.exists() && legacy.exists() {
-            return legacy;
-        }
-        return new_dir;
+        return home.join(".config/kotoma/logs");
     }
     PathBuf::from(".")
 }
