@@ -63,11 +63,6 @@ pub struct TranslatorConfigToml {
     pub max_new_tokens: u32,
     #[serde(default = "default_translator_startup_timeout")]
     pub startup_timeout_secs: u64,
-    /// Write 要約/Summary sections on quit. Off by default; enable per-run
-    /// with `--summary` or persistently via this key for meeting-minutes
-    /// workflows.
-    #[serde(default = "default_summarize")]
-    pub summarize: bool,
 }
 
 fn default_output() -> PathBuf {
@@ -109,10 +104,6 @@ fn default_translator_max_new() -> u32 {
 fn default_translator_startup_timeout() -> u64 {
     120
 }
-fn default_summarize() -> bool {
-    false
-}
-
 impl Config {
     pub fn load(explicit: Option<&Path>) -> Result<Self> {
         let path = find_config(explicit)?;

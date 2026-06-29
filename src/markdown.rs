@@ -1,5 +1,4 @@
 use crate::transcribe::TranscriptLine;
-use crate::translate::Summary;
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::io::Write;
@@ -9,7 +8,6 @@ pub fn write(
     path: &Path,
     lines: &[TranscriptLine],
     existing: Option<&str>,
-    summary: Option<&Summary>,
 ) -> Result<()> {
     if lines.is_empty() && existing.is_none() {
         return Ok(());
@@ -25,13 +23,13 @@ pub fn write(
             }
             writeln!(f)?;
             if !lines.is_empty() {
-                write_session(&mut f, lines, summary)?;
+                write_session(&mut f, lines)?;
             }
         }
         None => {
             write_frontmatter(&mut f)?;
             if !lines.is_empty() {
-                write_session(&mut f, lines, summary)?;
+                write_session(&mut f, lines)?;
             }
         }
     }
@@ -51,7 +49,6 @@ fn write_frontmatter(f: &mut std::fs::File) -> Result<()> {
 fn write_session(
     f: &mut std::fs::File,
     lines: &[TranscriptLine],
-    summary: Option<&Summary>,
 ) -> Result<()> {
     let started: DateTime<Local> = lines
         .first()
@@ -79,18 +76,6 @@ fn write_session(
         )?;
     }
     writeln!(f)?;
-    if let Some(s) = summary {
-        writeln!(f, "### 要約")?;
-        writeln!(f)?;
-        writeln!(f, "{}", s.ja.trim())?;
-        writeln!(f)?;
-        if let Some(en) = &s.en {
-            writeln!(f, "### Summary")?;
-            writeln!(f)?;
-            writeln!(f, "{}", en.trim())?;
-            writeln!(f)?;
-        }
-    }
     writeln!(f, "| time | English | 日本語 |")?;
     writeln!(f, "|------|---------|--------|")?;
 

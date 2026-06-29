@@ -380,60 +380,16 @@ fn run_loop(
                     match (code, modifiers) {
                         (KeyCode::Char('q'), _)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            let summary = cfg.translator.as_ref().and_then(|t| {
-                                if !t.summarize
-                                    || !matches!(translator_status, TranslatorStatus::Ready)
-                                    || lines.is_empty()
-                                {
-                                    return None;
-                                }
-                                // One synchronous draw so the user sees why
-                                // quitting takes a few seconds.
-                                saved_note = Some("要約を生成中…".to_string());
-                                let lang =
-                                    language.read().map(|g| g.clone()).unwrap_or_default();
-                                let _ = terminal.draw(|f| {
-                                    draw(
-                                        f,
-                                        &UiState {
-                                            lines: &lines,
-                                            level: level_smooth,
-                                            language: &lang,
-                                            recording: !paused.load(Ordering::Relaxed),
-                                            input_name: &input_name,
-                                            model_name,
-                                            saved_note: saved_note.as_deref(),
-                                            translator_status,
-                                            single_column: cfg.translator.is_none(),
-                                            picker: None,
-                                            show_help: false,
-                                            draft,
-                                            scroll_up,
-                                            scroll_max: &scroll_max_cell,
-                                        },
-                                        &mut layout,
-                                    );
-                                });
-                                match translate::summarize(t.port, &lines) {
-                                    Ok(s) if !s.ja.is_empty() => Some(s),
-                                    Ok(_) => None,
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "summary failed — saving without it");
-                                        None
-                                    }
-                                }
-                            });
                             markdown::write(
                                 &cfg.output_path,
                                 &lines,
                                 existing_content,
-                                summary.as_ref(),
                             )?;
                             info!(path = %cfg.output_path.display(), "saved on quit");
                             break;
                         }
                         (KeyCode::Char('s'), _) => {
-                            markdown::write(&cfg.output_path, &lines, existing_content, None)?;
+                            markdown::write(&cfg.output_path, &lines, existing_content)?;
                             saved_note = Some(format!("saved → {}", cfg.output_path.display()));
                         }
                         (KeyCode::Char('l'), _) => {
