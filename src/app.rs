@@ -8,7 +8,7 @@ use crate::{
     ui::{draw, TranscriptLayout, UiState},
     vad::VadRunner,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, unbounded, Receiver};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
@@ -380,17 +380,46 @@ fn run_loop(
                     match (code, modifiers) {
                         (KeyCode::Char('q'), _)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            markdown::write(
-                                &cfg.output_path,
-                                &lines,
-                                existing_content,
-                            )?;
-                            info!(path = %cfg.output_path.display(), "saved on quit");
-                            break;
+                            match markdown::write(&cfg.output_path, &lines, existing_content) {
+                                Ok(()) => {
+                                    info!(path = %cfg.output_path.display(), "saved on quit");
+                                    break;
+                                }
+                                Err(e) => {
+                                    // The transcript only exists in memory: never quit
+                                    // without it landing on disk somewhere. Try a
+                                    // recovery path; if even that fails, stay running
+                                    // so the user can retry after fixing the disk.
+                                    tracing::error!(error = %e, "save on quit failed");
+                                    let recovery = cfg.log_dir.join("transcript-recovery.md");
+                                    match markdown::write(&recovery, &lines, existing_content) {
+                                        Ok(()) => {
+                                            return Err(e).context(format!(
+                                                "saving {} failed — transcript recovered to {}",
+                                                cfg.output_path.display(),
+                                                recovery.display()
+                                            ));
+                                        }
+                                        Err(e2) => {
+                                            tracing::error!(error = %e2, "recovery save failed");
+                                            saved_note = Some(format!(
+                                                "save FAILED ({e}) — fix the disk and press q/s again"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
                         }
                         (KeyCode::Char('s'), _) => {
-                            markdown::write(&cfg.output_path, &lines, existing_content)?;
-                            saved_note = Some(format!("saved → {}", cfg.output_path.display()));
+                            saved_note = Some(
+                                match markdown::write(&cfg.output_path, &lines, existing_content) {
+                                    Ok(()) => format!("saved → {}", cfg.output_path.display()),
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "manual save failed");
+                                        format!("save FAILED: {e}")
+                                    }
+                                },
+                            );
                         }
                         (KeyCode::Char('l'), _) => {
                             if let Ok(mut g) = language.write() {
