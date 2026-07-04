@@ -35,6 +35,9 @@ struct ModelEntry {
     size: String,
     #[serde(default)]
     note: String,
+    /// Expected sha256 of the downloaded file; empty skips verification.
+    #[serde(default)]
+    sha256: String,
 }
 
 impl ModelEntry {
@@ -109,7 +112,8 @@ fn active_files() -> (Option<String>, Option<String>) {
     };
     let basename = |v: Option<&toml::Value>| {
         v.and_then(|v| v.as_str())
-            .and_then(|s| s.rsplit('/').next())
+            .and_then(|s| std::path::Path::new(s).file_name())
+            .and_then(|n| n.to_str())
             .map(str::to_string)
     };
     let asr = basename(value.get("model_path"));
@@ -148,26 +152,69 @@ fn list(catalog: &Catalog) -> Result<()> {
 /// Download one model into `dir`, skipping it if already present. Shells out
 /// to curl for a progress bar and resilient large-file handling, like
 /// install.sh.
+///
+/// Downloads land in a `<file>.part` first and are renamed into place only
+/// after completing (and passing the checksum), so an interrupted download
+/// can never masquerade as an installed model. A leftover `.part` resumes
+/// via curl `-C -` on the next attempt.
 fn download(m: &ModelEntry, dir: &std::path::Path) -> Result<()> {
     let dest = dir.join(&m.file);
     if dest.exists() && std::fs::metadata(&dest).map(|md| md.len() > 0).unwrap_or(false) {
         println!("already present: {}", m.name);
         return Ok(());
     }
+    let part = dir.join(format!("{}.part", m.file));
     println!("==> Downloading {} ({})", m.name, m.size);
     let status = std::process::Command::new("curl")
-        .args(["-fL", "--progress-bar", "-o"])
-        .arg(&dest)
+        .args(["-fL", "-C", "-", "--progress-bar", "-o"])
+        .arg(&part)
         .arg(&m.url)
         .status()
         .context("running curl (is it installed?)")?;
+
+    let checksum = if m.sha256.is_empty() {
+        None
+    } else if part.exists() {
+        println!("verifying checksum…");
+        Some(file_sha256(&part)? == m.sha256)
+    } else {
+        Some(false)
+    };
+
     if !status.success() {
-        // Don't leave a truncated file behind.
-        let _ = std::fs::remove_file(&dest);
-        bail!("download failed for {} (curl exited with {status})", m.name);
+        // An already-complete .part makes the resume request fail (HTTP 416);
+        // the checksum tells that apart from a genuinely partial download.
+        if checksum != Some(true) {
+            bail!(
+                "download failed for {} (curl exited with {status}) — \
+                 rerun to resume, or delete {} to start over",
+                m.name,
+                part.display()
+            );
+        }
+    } else if checksum == Some(false) {
+        // Complete but corrupt — resuming won't fix it, start over.
+        let _ = std::fs::remove_file(&part);
+        bail!(
+            "checksum mismatch for {} (expected sha256 {}) — corrupted download removed, please retry",
+            m.name,
+            m.sha256
+        );
     }
+
+    std::fs::rename(&part, &dest)
+        .with_context(|| format!("moving {} into place", part.display()))?;
     println!("installed → {}", dest.display());
     Ok(())
+}
+
+fn file_sha256(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut f, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Point the config doc at `m` (top-level `model_path` for ASR, the
@@ -317,4 +364,37 @@ fn rm(catalog: &Catalog, name: Option<&str>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_sha256_matches_known_vector() {
+        let path = std::env::temp_dir().join(format!("kotoma-sha-test-{}", std::process::id()));
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(
+            file_sha256(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn embedded_catalog_parses_and_all_models_have_sha256() {
+        let catalog: Catalog = toml::from_str(CATALOG_TOML).unwrap();
+        assert!(!catalog.model.is_empty());
+        for m in &catalog.model {
+            assert_eq!(m.sha256.len(), 64, "model {} missing sha256", m.name);
+        }
+        for (name, preset) in &catalog.preset {
+            for mname in &preset.models {
+                assert!(
+                    catalog.model.iter().any(|m| &m.name == mname),
+                    "preset {name} references unknown model {mname}"
+                );
+            }
+        }
+    }
 }

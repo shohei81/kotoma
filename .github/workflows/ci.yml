@@ -7,8 +7,7 @@ on:
 
 jobs:
   test:
-    # macOS runner: the whisper-rs "metal" feature is enabled unconditionally
-    # in Cargo.toml, so Linux runners can't build this crate.
+    # macOS is the primary target (whisper-rs runs with the Metal feature).
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,3 +19,16 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: Test
         run: cargo test
+
+  check-linux:
+    # Non-macOS targets get whisper-rs without Metal; this job keeps the
+    # crate buildable there (cpal needs ALSA headers, whisper.cpp needs cmake).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev cmake
+      - name: Check
+        run: cargo check --all-targets
