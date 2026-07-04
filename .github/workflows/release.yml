@@ -9,19 +9,51 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest # arm64 (Apple Silicon)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest # arm64 (Apple Silicon)
+            asset: kotoma-aarch64-apple-darwin.tar.gz
+          # ubuntu-22.04 for an older glibc baseline; the PulseAudio host is
+          # a pure-Rust client, so the binary has no libpulse dependency.
+          - runner: ubuntu-22.04
+            asset: kotoma-x86_64-unknown-linux-gnu.tar.gz
+          - runner: windows-latest
+            asset: kotoma-x86_64-pc-windows-msvc.zip
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev cmake
       - name: Build
         run: cargo build --release
-      - name: Package
-        # Version-less asset name so install.sh can use the stable
-        # releases/latest/download/ URL without an API call.
-        run: tar -C target/release -czf kotoma-aarch64-apple-darwin.tar.gz kotoma
+      # Version-less asset names so install scripts can use the stable
+      # releases/latest/download/ URL without an API call.
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar -C target/release -czf ${{ matrix.asset }} kotoma
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/kotoma.exe -DestinationPath ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: kotoma-aarch64-apple-darwin.tar.gz
+          files: dist/*
           generate_release_notes: true
