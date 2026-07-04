@@ -280,8 +280,25 @@ Platform support for system-audio capture:
   ALSA host, which has no monitor sources.
 
 Run `kotoma devices` to print every source kotoma can see (plus the
-auto-detect candidates) without starting the TUI — include its output when
-reporting capture issues.
+auto-detect candidates) without starting the TUI, and
+`kotoma devices probe "<source name>" [secs]` to open one source and measure
+whether it actually delivers signal — include both outputs when reporting
+capture issues.
+
+#### macOS: tap opens but captures pure silence
+
+macOS only shows the system-audio recording permission prompt if the app
+hosting kotoma (your **terminal**) declares `NSAudioCaptureUsageDescription`
+in its Info.plist — most terminals (Ghostty, Terminal.app, …) don't, so the
+prompt never appears and the tap silently delivers zeros. kotoma's status
+line flags this after ~15 s ("no signal from …"). Fix it by granting the
+permission manually:
+
+1. System Settings → Privacy & Security → **Screen & System Audio
+   Recording** (choose "system audio only" if offered)
+2. Add your terminal app with the **+** button
+3. Quit and relaunch the terminal, then verify with
+   `kotoma devices probe "loopback:<your output device>"` while audio plays
 
 ### Markdown output
 

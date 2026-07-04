@@ -157,6 +157,48 @@ fn auto_detect_error_message() -> &'static str {
     }
 }
 
+/// Open `device` and measure what it actually delivers for `secs` seconds.
+/// Prints chunk/sample counts and peak/RMS — separates "stream never runs"
+/// from "runs but is pure silence" (routing / capture-permission issues)
+/// from "signal OK". Used by `kotoma devices probe` for bug reports.
+pub fn probe(device: &str, secs: u64) -> Result<()> {
+    let (tx, rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+    let (_stream, name) = build_stream(device, Sink::Direct(tx))?;
+    println!("capturing from {name} for {secs}s — play some audio now…");
+
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let (mut chunks, mut samples) = (0usize, 0usize);
+    let mut peak = 0f32;
+    let mut sumsq = 0f64;
+    while Instant::now() < deadline {
+        if let Ok(c) = rx.recv_timeout(Duration::from_millis(200)) {
+            chunks += 1;
+            samples += c.len();
+            for s in &c {
+                peak = peak.max(s.abs());
+                sumsq += (*s as f64) * (*s as f64);
+            }
+        }
+    }
+    let rms = if samples > 0 {
+        (sumsq / samples as f64).sqrt()
+    } else {
+        0.0
+    };
+    println!("chunks={chunks} samples={samples} peak={peak:.4} rms={rms:.5}");
+    if samples == 0 {
+        println!("=> no audio callbacks at all — the stream never started");
+    } else if peak < 0.001 {
+        println!(
+            "=> stream runs but delivers pure silence — check the source's \
+             routing and the system-audio capture permission"
+        );
+    } else {
+        println!("=> signal OK");
+    }
+    Ok(())
+}
+
 /// Watches whether the secondary (system-audio) stream actually carries
 /// signal. A mis-routed virtual driver (e.g. BlackHole selected here but the
 /// system output pointing elsewhere) opens without error and delivers

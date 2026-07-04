@@ -65,7 +65,7 @@ fn main() -> Result<()> {
         return model::run(&raw[2..]);
     }
     if raw.get(1).map(String::as_str) == Some("devices") {
-        return run_devices();
+        return run_devices(&raw[2..]);
     }
 
     let args = Args::parse();
@@ -165,8 +165,16 @@ fn run_update(tier: Option<&str>) -> Result<()> {
 }
 
 /// Print enumerated audio sources without starting the TUI — for writing
-/// config files and for cross-platform bug reports.
-fn run_devices() -> Result<()> {
+/// config files and for cross-platform bug reports. `devices probe <name>
+/// [secs]` additionally opens one source and reports its signal level.
+fn run_devices(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("probe") {
+        let name = args
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("usage: kotoma devices probe <device name> [secs]"))?;
+        let secs = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
+        return audio::probe(name, secs);
+    }
     println!("Microphone sources:");
     let (mic, sys) = audio::list_devices_split();
     for m in &mic {
