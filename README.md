@@ -7,12 +7,27 @@ Live bilingual voice transcription TUI in Rust.
 - **UI**: `ratatui` two-column display (English ↔ 日本語)
 - **Output**: timestamped Markdown table
 
+## Platforms
+
+| OS | Binary | ASR backend | System-audio capture | Status |
+|----|--------|-------------|----------------------|--------|
+| macOS (Apple Silicon) | prebuilt | whisper.cpp (Metal) | native Core Audio tap (14.2+), BlackHole fallback | primary target |
+| Windows x86_64 | prebuilt | whisper.cpp (CPU) | native WASAPI loopback | builds in CI, **untested on real hardware** |
+| Linux x86_64 | prebuilt | whisper.cpp (CPU) | PulseAudio/PipeWire `*.monitor` sources | builds in CI, **untested on real hardware** |
+
+Windows and Linux support is new: the binaries build and the capture paths
+are wired up, but nobody has verified them end-to-end yet — bug reports
+(ideally with `kotoma devices` output) are very welcome.
+
 ## Requirements
 
-- `llama-server` on PATH → `brew install llama.cpp` (only for translation)
-- Apple Silicon Mac: nothing else — the installer fetches a prebuilt binary
-- Other platforms / `--from-source`: Rust (stable) + CMake + a C/C++ toolchain
-  (needed to build whisper.cpp)
+- `llama-server` on PATH (only for translation)
+  - macOS: `brew install llama.cpp`
+  - Windows/Linux: a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases)
+    or your package manager
+- With a prebuilt binary: nothing else
+- Building from source: Rust (stable) + CMake + a C/C++ toolchain (needed to
+  build whisper.cpp); on Linux also ALSA headers (`libasound2-dev`)
 
 ## Model presets
 
@@ -33,7 +48,9 @@ ASR + a translator model; pick one (or `both`, or any mix — see
 
 ## Install / update
 
-One command from anywhere — no clone needed:
+One command from anywhere — no clone needed.
+
+macOS / Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash -s -- high
@@ -41,10 +58,20 @@ curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | b
 curl -fsSL https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh | bash
 ```
 
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/shohei81/kotoma/main/install.ps1 | iex
+# with a model preset:
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/shohei81/kotoma/main/install.ps1))) -Tier high
+```
+
 The installer always:
 - Downloads the latest prebuilt binary from GitHub Releases into
-  `~/.local/bin/kotoma` (Apple Silicon macOS). Elsewhere — or with
-  `--from-source` — it falls back to `cargo install --git … --force kotoma`.
+  `~/.local/bin/kotoma` (macOS arm64 / Linux x86_64) or
+  `%LOCALAPPDATA%\kotoma\bin` (Windows x86_64). On other platforms — or with
+  `--from-source` / `-FromSource` — it falls back to
+  `cargo install --git … --force kotoma`.
 
 When you pass a preset (`standard` / `high` / `both`) it then runs
 `kotoma model preset <name>` to download the models and write
@@ -64,10 +91,11 @@ kotoma update          # update the binary only
 kotoma update high     # also (re)fetch the high-tier model preset
 ```
 
-This re-runs `install.sh` for you — building from source when the current
-binary is a `cargo install` one (`~/.cargo/bin`), otherwise downloading the
-latest prebuilt binary. Running the original `curl … | bash` command (with or
-without a tier) does the same thing.
+This re-runs `install.sh` (or `install.ps1` on Windows) for you — building
+from source when the current binary is a `cargo install` one
+(`~/.cargo/bin`), otherwise downloading the latest prebuilt binary. Running
+the original `curl … | bash` / `irm … | iex` command (with or without a
+tier) does the same thing.
 
 ### Managing models
 
@@ -203,10 +231,10 @@ The opposite column shows the machine-translated version (or `…` while pending
 ### Audio sources
 
 **Quick toggle:** press `m` to enable system-audio mixing using OS-appropriate
-auto-detection (WASAPI loopback on Windows, BlackHole-style virtual driver on
-macOS, `*.monitor` source on Linux/PulseAudio). Press `m` again to turn it
-off. If auto-detection fails (e.g. no virtual driver installed on macOS),
-the status line shows an actionable error.
+auto-detection (Core Audio tap on macOS, WASAPI loopback on Windows,
+`*.monitor` source on Linux). Press `m` again to turn it off. If every
+candidate fails to open (e.g. the capture permission was denied), the status
+line shows an actionable error.
 
 **Manual override:** press `d` to open a two-column picker — **Microphone**
 on the left, **System audio** on the right. `↑/↓` chooses within a column,
@@ -227,14 +255,28 @@ system_audio_device = "auto"     # or an explicit device name, see examples
 
 Platform support for system-audio capture:
 
+- **macOS 14.2+** — natively supported via Core Audio process taps: pick
+  `[loopback] <output name>` (or just press `m`) and the system mix is
+  captured directly, no virtual driver needed. The first use triggers a
+  system permission prompt — grant your terminal app **System Settings →
+  Privacy & Security → Screen & System Audio Recording**. Zoom/Meet/browser
+  audio is captured even when you're wearing headphones.
+- **macOS < 14.2** — install a virtual audio driver such as
+  [BlackHole](https://github.com/ExistentialAudio/BlackHole), route system
+  audio through it (a Multi-Output Device lets you hear and capture
+  simultaneously), and select BlackHole from the regular input list. `m`
+  falls back to BlackHole automatically when the native tap can't open.
 - **Windows** — natively supported via WASAPI. Pick `[loopback] Speakers`
   (or similar) and system audio is captured directly.
-- **macOS** — cpal has no native loopback. Install a virtual audio driver
-  such as [BlackHole](https://github.com/ExistentialAudio/BlackHole), route
-  system audio through it (a Multi-Output Device lets you hear and capture
-  simultaneously), and select BlackHole from the regular input list.
-- **Linux (PulseAudio/PipeWire)** — pick the sink's `*.monitor` entry from
-  the input list.
+- **Linux (PulseAudio/PipeWire)** — kotoma talks to the PulseAudio server
+  (PipeWire serves the same protocol via `pipewire-pulse`), so the sink's
+  `*.monitor` entries appear in the input list — pick one, or let `m`
+  auto-detect the first monitor source. Plain-ALSA setups fall back to the
+  ALSA host, which has no monitor sources.
+
+Run `kotoma devices` to print every source kotoma can see (plus the
+auto-detect candidates) without starting the TUI — include its output when
+reporting capture issues.
 
 ### Markdown output
 
@@ -245,7 +287,14 @@ Platform support for system-audio capture:
 | 10:31:10 | I'm fine, thanks. | 元気です、ありがとう。 |
 ```
 
-## Memory & performance (M-series Mac)
+## Memory & performance
+
+On Windows and Linux, whisper.cpp runs on the CPU — prefer the standard
+preset or a quantized turbo model (`whisper-large-v3-turbo-q5_0`); the
+full-size large model is unlikely to keep up with realtime without a GPU
+build. The numbers below are for the primary target, Apple Silicon.
+
+### M-series Mac
 
 On a 32 GB M4 MacBook Air with the recommended stack:
 - Whisper large-v3-turbo: transcribes faster than realtime on Metal
