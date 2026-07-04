@@ -297,8 +297,10 @@ permission manually:
 1. System Settings → Privacy & Security → **Screen & System Audio
    Recording** (choose "system audio only" if offered)
 2. Add your terminal app with the **+** button
-3. Quit and relaunch the terminal, then verify with
-   `kotoma devices probe "loopback:<your output device>"` while audio plays
+3. Verify with `kotoma devices probe "loopback:<your output device>"`
+   while audio plays — the grant applies to newly started kotoma processes
+   immediately; if it still reports silence, relaunch the terminal and
+   try again
 
 ### Markdown output
 
