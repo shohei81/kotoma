@@ -8,7 +8,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-const CONTEXT_PAIRS: usize = 3;
+// The pairs are a stable prompt-cache prefix, so a larger window costs almost
+// nothing per request while improving pronoun/terminology consistency.
+const CONTEXT_PAIRS: usize = 5;
 
 struct ContextWindow {
     pairs: VecDeque<(String, String, String)>, // (src_lang, src_text, dst_text)
@@ -83,6 +85,20 @@ impl ServerHandle {
             // Use the model's own chat template so any GGUF (Gemma, Qwen, …)
             // gets its correct prompt format via /v1/chat/completions.
             .arg("--jinja")
+            // Two slots so the en→ja and ja→en directions each keep their own
+            // prompt cache alive — with one slot, every direction switch
+            // invalidates the cache and re-prefills the whole prompt. The
+            // server routes each request to the slot with the longest common
+            // prefix, so no client-side slot pinning is needed.
+            .arg("--parallel")
+            .arg("2")
+            // q8_0 KV halves cache memory with no practical quality loss
+            // (needs flash attention, which recent llama-server defaults to
+            // 'auto' and enables on Metal/CPU alike).
+            .arg("--cache-type-k")
+            .arg("q8_0")
+            .arg("--cache-type-v")
+            .arg("q8_0")
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_err))
@@ -165,9 +181,15 @@ fn run(
                 },
             };
             let id = line.id;
+            let started = Instant::now();
             match translate_once(cfg, &line, &context) {
                 Ok((translated, off_target)) if !translated.is_empty() => {
-                    debug!(id, text = %translated, "translation complete");
+                    debug!(
+                        id,
+                        ms = started.elapsed().as_millis() as u64,
+                        text = %translated,
+                        "translation complete"
+                    );
                     // Caching an off-target line would feed it back as a
                     // few-shot example and make the leak self-perpetuate —
                     // show it once, but don't let it poison the context.
@@ -176,7 +198,11 @@ fn run(
                     } else {
                         context.push(&line.src_lang, &line.text, &translated);
                     }
-                    let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
+                    let _ = ui_tx.send(UiMsg::TranslationReady {
+                        id,
+                        translated,
+                        src_chars: line.text.chars().count(),
+                    });
                     // The server is demonstrably healthy again — only an
                     // uninterrupted crash loop should exhaust the budget.
                     restarts = 0;
@@ -446,6 +472,9 @@ mod tests {
             c.push("en", &format!("s{i}"), &format!("d{i}"));
         }
         assert_eq!(c.pairs.len(), CONTEXT_PAIRS);
-        assert_eq!(c.pairs.front().unwrap().1, "s7");
+        assert_eq!(
+            c.pairs.front().unwrap().1,
+            format!("s{}", 10 - CONTEXT_PAIRS)
+        );
     }
 }

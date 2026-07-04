@@ -28,6 +28,16 @@ input_device = "default"
 # Whisper decoding threads.
 threads = 4
 
+# Restrict whisper's encoder to each segment's actual length instead of the
+# fixed 30 s window — much less compute/heat on short utterances. Set false
+# if you suspect it hurts accuracy.
+# dynamic_audio_ctx = true
+
+# Segments that don't end a sentence merge with the next one (same language,
+# pause below this many ms) into one line, and the full sentence is
+# re-translated — big accuracy win for Japanese. 0 disables merging.
+# merge_gap_ms = 2000
+
 [vad]
 aggressiveness = 2
 min_speech_ms = 500
@@ -41,6 +51,8 @@ max_segment_ms = 15000
 binary = "llama-server"
 model_path = "models/gemma-4-E4B-it-Q4_K_M.gguf"
 port = 8787
-n_ctx = 8192
+# Shared across the server's two direction slots (~2048 each) — plenty for
+# the system prompt + recent context pairs, and half the KV memory of 8192.
+n_ctx = 4096
 max_new_tokens = 512
 startup_timeout_secs = 120

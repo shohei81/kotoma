@@ -30,15 +30,30 @@ pub struct TranscribeRunner {
     ctx: WhisperContext,
     threads: i32,
     language: Arc<RwLock<String>>,
+    dynamic_audio_ctx: bool,
 }
 
 const PROMPT_CHAR_WINDOW: usize = 224;
+
+/// Encoder frames to request for a segment of `n_samples` 16 kHz samples.
+///
+/// whisper always encodes a fixed 30 s window (1500 frames, 50 per second)
+/// no matter how short the audio is, so a 5 s utterance pays the full-window
+/// encoder cost — the dominant per-segment compute. Telling it how much
+/// audio actually exists (+25% headroom, floored at 384 frames to stay well
+/// clear of quality cliffs) cuts that roughly proportionally.
+fn audio_ctx_for(n_samples: usize) -> i32 {
+    let secs = n_samples as f32 / crate::audio::TARGET_SR as f32;
+    let frames = (secs * 50.0 * 1.25).ceil() as i32;
+    frames.clamp(384, 1500)
+}
 
 impl TranscribeRunner {
     pub fn new(
         model_path: &Path,
         threads: i32,
         language: Arc<RwLock<String>>,
+        dynamic_audio_ctx: bool,
     ) -> Result<Self> {
         let mut params = WhisperContextParameters::default();
         // Flash attention cuts the encoder's memory traffic and compute on
@@ -53,6 +68,7 @@ impl TranscribeRunner {
             ctx,
             threads,
             language,
+            dynamic_audio_ctx,
         })
     }
 
@@ -102,6 +118,12 @@ impl TranscribeRunner {
             // below do the real work.
             params.set_no_speech_thold(0.8);
             params.set_translate(false);
+            if self.dynamic_audio_ctx {
+                let audio_ctx = audio_ctx_for(seg.samples.len());
+                if audio_ctx < 1500 {
+                    params.set_audio_ctx(audio_ctx);
+                }
+            }
             if !prompt.is_empty() {
                 params.set_initial_prompt(&prompt);
             }
@@ -175,5 +197,19 @@ impl TranscribeRunner {
                 ended_at: seg.ended_at,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::audio_ctx_for;
+
+    #[test]
+    fn audio_ctx_scales_with_segment_length() {
+        let sr = 16_000;
+        assert_eq!(audio_ctx_for(2 * sr), 384); // short segments hit the floor
+        assert_eq!(audio_ctx_for(10 * sr), 625); // 10 s → 500 frames × 1.25
+        assert_eq!(audio_ctx_for(30 * sr), 1500); // never above the full window
+        assert_eq!(audio_ctx_for(60 * sr), 1500);
     }
 }

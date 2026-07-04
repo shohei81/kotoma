@@ -18,6 +18,15 @@ pub struct Config {
     pub system_audio_device: Option<String>,
     #[serde(default = "default_threads")]
     pub threads: i32,
+    /// Restrict whisper's encoder window to each segment's actual length
+    /// instead of the fixed 30 s — a large speed/power win on short
+    /// segments. Set false if you suspect it hurts accuracy.
+    #[serde(default = "default_true")]
+    pub dynamic_audio_ctx: bool,
+    /// Largest pause (ms) between segments that still merges them into one
+    /// sentence-shaped line for display and translation. 0 disables merging.
+    #[serde(default = "default_merge_gap")]
+    pub merge_gap_ms: u32,
     #[serde(default)]
     pub vad: VadConfig,
     #[serde(default)]
@@ -77,6 +86,12 @@ fn default_device() -> String {
 fn default_threads() -> i32 {
     4
 }
+fn default_true() -> bool {
+    true
+}
+fn default_merge_gap() -> u32 {
+    2000
+}
 fn default_aggr() -> u8 {
     2
 }
@@ -96,7 +111,9 @@ fn default_translator_port() -> u16 {
     8787
 }
 fn default_translator_n_ctx() -> u32 {
-    8192
+    // Split across the server's two slots; each direction needs well under
+    // 2048 tokens (system prompt + 5 context pairs + input).
+    4096
 }
 fn default_translator_max_new() -> u32 {
     512

@@ -3,7 +3,19 @@ use crate::transcribe::TranscriptLine;
 #[derive(Clone)]
 pub enum UiMsg {
     NewLine(TranscriptLine),
-    TranslationReady { id: u64, translated: String },
+    /// An existing line grew (sentence merge): replace the line with this
+    /// id wholesale; its translation resets to pending until the merged
+    /// retranslation arrives.
+    LineMerged(TranscriptLine),
+    TranslationReady {
+        id: u64,
+        translated: String,
+        /// Char count of the source text this translation was made from.
+        /// After a sentence merge the line's text has grown, so a stale
+        /// fragment translation (mismatched count) must be dropped instead
+        /// of briefly overwriting the pending merged one.
+        src_chars: usize,
+    },
     TranslatorStatus(TranslatorStatus),
 }
 

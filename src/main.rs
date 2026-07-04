@@ -1,4 +1,5 @@
 mod app;
+mod assemble;
 mod audio;
 mod config;
 mod filter;

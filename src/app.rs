@@ -1,4 +1,5 @@
 use crate::{
+    assemble::{Assembled, SentenceAssembler},
     audio::AudioCapture,
     config::Config,
     markdown,
@@ -91,10 +92,13 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
 
     let model_path = cfg.model_path.clone();
     let threads_n = cfg.threads;
+    let dynamic_audio_ctx = cfg.dynamic_audio_ctx;
     let lang_for_worker = language.clone();
-    thread::spawn(move || match TranscribeRunner::new(&model_path, threads_n, lang_for_worker) {
-        Ok(runner) => runner.run(seg_rx, line_tx),
-        Err(e) => tracing::error!("whisper init failed: {}", e),
+    thread::spawn(move || {
+        match TranscribeRunner::new(&model_path, threads_n, lang_for_worker, dynamic_audio_ctx) {
+            Ok(runner) => runner.run(seg_rx, line_tx),
+            Err(e) => tracing::error!("whisper init failed: {}", e),
+        }
     });
 
     // Translator fanout: mirror transcript lines to UI immediately so the source
@@ -123,14 +127,23 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
             true
         });
 
+    let merge_gap_ms = cfg.merge_gap_ms;
     let translator_status_init = match translator_cfg {
         Some(tcfg) => {
             let (trans_in_tx, trans_in_rx) = bounded::<TranscriptLine>(32);
             let ui_tx_fanout = ui_tx.clone();
             thread::spawn(move || {
+                let mut asm = SentenceAssembler::new(merge_gap_ms);
                 while let Ok(line) = line_rx.recv() {
-                    let _ = ui_tx_fanout.send(UiMsg::NewLine(line.clone()));
-                    let _ = trans_in_tx.send(line);
+                    // Merged lines re-enter the translator with the full
+                    // sentence under the same id; its later TranslationReady
+                    // simply overwrites the fragment's.
+                    let (msg, job) = match asm.push(line) {
+                        Assembled::New(l) => (UiMsg::NewLine(l.clone()), l),
+                        Assembled::Merged(l) => (UiMsg::LineMerged(l.clone()), l),
+                    };
+                    let _ = ui_tx_fanout.send(msg);
+                    let _ = trans_in_tx.send(job);
                 }
             });
             translate::spawn(
@@ -151,8 +164,13 @@ pub fn run(cfg: Config, existing_content: Option<String>) -> Result<()> {
         None => {
             let ui_tx_fwd = ui_tx.clone();
             thread::spawn(move || {
+                let mut asm = SentenceAssembler::new(merge_gap_ms);
                 while let Ok(line) = line_rx.recv() {
-                    let _ = ui_tx_fwd.send(UiMsg::NewLine(line));
+                    let msg = match asm.push(line) {
+                        Assembled::New(l) => UiMsg::NewLine(l),
+                        Assembled::Merged(l) => UiMsg::LineMerged(l),
+                    };
+                    let _ = ui_tx_fwd.send(msg);
                 }
             });
             TranslatorStatus::Failed
@@ -234,10 +252,25 @@ fn run_loop(
             needs_redraw = true;
             match msg {
                 UiMsg::NewLine(line) => lines.push(line),
-                UiMsg::TranslationReady { id, translated } => {
-                    if let Some(idx) = lines.iter().position(|l| l.id == id) {
-                        lines[idx].translated = Some(translated);
+                UiMsg::LineMerged(updated) => {
+                    if let Some(idx) = lines.iter().position(|l| l.id == updated.id) {
+                        lines[idx] = updated;
                         layout.invalidate_line(idx);
+                    }
+                }
+                UiMsg::TranslationReady {
+                    id,
+                    translated,
+                    src_chars,
+                } => {
+                    if let Some(idx) = lines.iter().position(|l| l.id == id) {
+                        // A merge grew this line after the fragment was sent
+                        // for translation — drop the stale result; the merged
+                        // retranslation is already queued behind it.
+                        if lines[idx].text.chars().count() == src_chars {
+                            lines[idx].translated = Some(translated);
+                            layout.invalidate_line(idx);
+                        }
                     }
                 }
                 UiMsg::TranslatorStatus(s) => translator_status = s,

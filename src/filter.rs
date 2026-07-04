@@ -191,7 +191,7 @@ fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s[start..].eq_ignore_ascii_case(suffix)
 }
 
-fn is_sentence_end(s: &str) -> bool {
+pub(crate) fn is_sentence_end(s: &str) -> bool {
     let t = s.trim_end();
     t.ends_with('.')
         || t.ends_with('?')
