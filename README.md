@@ -246,6 +246,11 @@ mono before transcription, so your voice and the meeting/browser audio land
 in the same transcript. The mic drives the cadence; if the system-audio
 source goes silent, the mix degrades to mic-only automatically.
 
+A system-audio source that opens but never delivers signal (typically a
+virtual driver the system output isn't actually routed through, or a denied
+capture permission) is flagged in the status line after ~15 seconds instead
+of failing silently.
+
 Persistent config in `kotoma.toml`:
 
 ```toml

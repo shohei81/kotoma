@@ -4,7 +4,9 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::Sender;
 use rubato::{FftFixedInOut, Resampler};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 pub const TARGET_SR: u32 = 16_000;
@@ -155,9 +157,57 @@ fn auto_detect_error_message() -> &'static str {
     }
 }
 
+/// Watches whether the secondary (system-audio) stream actually carries
+/// signal. A mis-routed virtual driver (e.g. BlackHole selected here but the
+/// system output pointing elsewhere) opens without error and delivers
+/// nothing but silence — the worst failure mode, because nothing fails.
+pub struct SecondaryMonitor {
+    started: Instant,
+    /// ms-since-start of the last chunk with audible signal; 0 = never.
+    last_signal_ms: AtomicU64,
+}
+
+impl SecondaryMonitor {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            last_signal_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn note_chunk(&self, chunk: &[f32]) {
+        // Loopback silence is digital (exact zeros); any real signal clears it.
+        if chunk.iter().any(|s| s.abs() > 0.001) {
+            self.last_signal_ms.store(
+                self.started.elapsed().as_millis() as u64,
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    /// How long the secondary has been silent — since the last audible
+    /// chunk, or since capture started if it never produced one.
+    pub fn silent_for(&self) -> Duration {
+        let last = Duration::from_millis(self.last_signal_ms.load(Ordering::Relaxed));
+        self.started.elapsed().saturating_sub(last)
+    }
+}
+
 pub struct AudioCapture {
     _streams: Vec<Stream>,
     pub input_name: String,
+    /// Present when a secondary (system-audio) source is being mixed in:
+    /// its display name plus the signal watchdog.
+    secondary: Option<(String, Arc<SecondaryMonitor>)>,
+}
+
+impl AudioCapture {
+    /// Name and current silence duration of the secondary source, if any.
+    pub fn secondary_silence(&self) -> Option<(&str, Duration)> {
+        self.secondary
+            .as_ref()
+            .map(|(name, mon)| (name.as_str(), mon.silent_for()))
+    }
 }
 
 impl AudioCapture {
@@ -201,6 +251,7 @@ impl AudioCapture {
             return Ok(Self {
                 _streams: vec![stream],
                 input_name: name,
+                secondary: None,
             });
         }
 
@@ -212,11 +263,13 @@ impl AudioCapture {
             return Ok(Self {
                 _streams: vec![stream],
                 input_name: name,
+                secondary: None,
             });
         }
 
         let secondary_buf: Arc<Mutex<VecDeque<f32>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(SECONDARY_CAP_SAMPLES)));
+        let monitor = Arc::new(SecondaryMonitor::new());
         let (primary_stream, primary_name) = build_stream(
             primary,
             Sink::Primary {
@@ -228,12 +281,14 @@ impl AudioCapture {
             &secondary_candidates,
             Sink::Secondary {
                 buf: secondary_buf,
+                monitor: monitor.clone(),
             },
         )?;
 
         Ok(Self {
             _streams: vec![primary_stream, secondary_stream],
             input_name: format!("{} + {}", primary_name, secondary_label),
+            secondary: Some((secondary_label, monitor)),
         })
     }
 }
@@ -250,7 +305,10 @@ enum Sink {
         secondary: Arc<Mutex<VecDeque<f32>>>,
     },
     /// Mix-mode secondary: append to the shared ring buffer.
-    Secondary { buf: Arc<Mutex<VecDeque<f32>>> },
+    Secondary {
+        buf: Arc<Mutex<VecDeque<f32>>>,
+        monitor: Arc<SecondaryMonitor>,
+    },
 }
 
 impl Sink {
@@ -272,7 +330,8 @@ impl Sink {
                 }
                 tx.try_send(chunk).is_err()
             }
-            Sink::Secondary { buf } => {
+            Sink::Secondary { buf, monitor } => {
+                monitor.note_chunk(&chunk);
                 if let Ok(mut buf) = buf.lock() {
                     buf.extend(chunk.iter().copied());
                     // Drop oldest if we've exceeded the cap, so a drifting
@@ -504,5 +563,20 @@ impl ProcState {
         if newly_dropped > 0 {
             self.note_dropped(newly_dropped);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secondary_monitor_tracks_signal() {
+        let m = SecondaryMonitor::new();
+        std::thread::sleep(Duration::from_millis(30));
+        m.note_chunk(&[0.0; 64]); // digital silence doesn't count as signal
+        assert!(m.silent_for() >= Duration::from_millis(20));
+        m.note_chunk(&[0.5; 4]);
+        assert!(m.silent_for() < Duration::from_millis(20));
     }
 }

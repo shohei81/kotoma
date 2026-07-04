@@ -223,6 +223,11 @@ fn run_loop(
     let mut last_gauge_bucket = u16::MAX;
     let mut last_draw = std::time::Instant::now();
     const GAUGE_MIN_INTERVAL: Duration = Duration::from_millis(100);
+    // A system-audio source that opens fine but only ever delivers silence
+    // (mis-routed virtual driver, denied capture permission) would otherwise
+    // fail invisibly — surface it in the status line after a grace period.
+    let mut sys_silence_warned = false;
+    const SYS_SILENCE_GRACE: Duration = Duration::from_secs(15);
 
     loop {
         while let Ok(msg) = ui_rx.try_recv() {
@@ -246,6 +251,22 @@ fn run_loop(
             draft = d;
             needs_redraw = true;
         }
+        if let Some((name, silent)) = capture.secondary_silence() {
+            if !sys_silence_warned && silent >= SYS_SILENCE_GRACE {
+                sys_silence_warned = true;
+                saved_note = Some(format!(
+                    "system audio: no signal from {} — check its routing / capture permission",
+                    name
+                ));
+                tracing::warn!(source = %name, "secondary source silent — likely mis-routed");
+                needs_redraw = true;
+            } else if sys_silence_warned && silent < Duration::from_secs(1) {
+                sys_silence_warned = false;
+                saved_note = Some(format!("system audio: {} is delivering signal", name));
+                needs_redraw = true;
+            }
+        }
+
         // Deadband: sub-1% levels (ambient noise) read as zero, then bucket to
         // 4% steps so tiny fluctuations don't each trigger a repaint.
         let gauge_pct = if level_smooth < 0.0025 {
@@ -357,6 +378,7 @@ fn run_loop(
                                     *capture = new_cap;
                                     *mic_device = mic_choice.clone();
                                     *sys_device = sys_choice.clone();
+                                    sys_silence_warned = false;
                                     info!(
                                         mic = %mic_choice,
                                         sys = %sys_choice,
@@ -474,6 +496,7 @@ fn run_loop(
                                     input_name = new_cap.input_name.clone();
                                     *capture = new_cap;
                                     *sys_device = next_sys.clone();
+                                    sys_silence_warned = false;
                                     saved_note = Some(format!("system audio: {}", input_name));
                                     info!(sys = %next_sys, "toggled system audio");
                                 }
