@@ -10,7 +10,7 @@ repository = "https://github.com/shohei81/kotoma"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-cpal = "0.15"
+cpal = "0.18"
 crossbeam-channel = "0.5"
 crossterm = "0.28"
 dirs = "5"
@@ -25,6 +25,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ureq = { version = "2", features = ["json"] }
 webrtc-vad = "0.4"
+
+# The PulseAudio host exposes *.monitor sources for system-audio capture;
+# the plain ALSA host can't see them. It's a pure-Rust protocol client (no
+# libpulse), and PipeWire systems serve it via pipewire-pulse — so this one
+# feature covers both worlds without adding native library dependencies.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18", features = ["pulseaudio"] }
 
 # Metal only exists on macOS; keep other platforms buildable (CPU/whatever
 # whisper.cpp picks) by gating the feature per target.

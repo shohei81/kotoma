@@ -9,6 +9,32 @@ use tracing::{info, warn};
 
 pub const TARGET_SR: u32 = 16_000;
 
+/// Human-readable device name (cpal 0.18 moved this into `description()`).
+fn device_name(d: &Device) -> Option<String> {
+    d.description().ok().map(|desc| desc.name().to_string())
+}
+
+/// The audio host to enumerate and open devices on.
+///
+/// On Linux the default host is ALSA, which cannot see the `*.monitor`
+/// sources needed for system-audio capture — prefer the PulseAudio host
+/// (a pure-Rust protocol client, also served by pipewire-pulse on PipeWire
+/// systems) when a server is actually reachable, falling back to ALSA.
+/// Everywhere else the default host is the right one (WASAPI / Core Audio).
+fn best_host() -> cpal::Host {
+    #[cfg(target_os = "linux")]
+    if let Ok(host) = cpal::host_from_id(cpal::HostId::PulseAudio) {
+        let usable = host
+            .input_devices()
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+        if usable {
+            return host;
+        }
+    }
+    cpal::default_host()
+}
+
 /// Prefix used on loopback (system-audio) sources so we can distinguish them
 /// from real input devices that happen to share the same name.
 pub const LOOPBACK_PREFIX: &str = "loopback:";
@@ -17,33 +43,30 @@ pub const LOOPBACK_PREFIX: &str = "loopback:";
 /// silent secondary stream can't grow unboundedly.
 const SECONDARY_CAP_SAMPLES: usize = TARGET_SR as usize;
 
-/// Best-effort auto-detection of a system-audio source for the current OS.
+/// Best-effort auto-detection of system-audio sources for the current OS,
+/// ordered by preference. The caller tries them in order — the preferred
+/// native path can fail at open time (permission denied, macOS < 14.2) while
+/// a later fallback still works.
 ///
-/// - Windows: the default output device, accessed via WASAPI loopback.
-/// - macOS: an installed virtual driver (BlackHole / Soundflower / Loopback
-///   Audio / VB-Cable) exposed as a regular input device.
-/// - Linux (PulseAudio/PipeWire): the first `*.monitor` input source.
-///
-/// Returns the device string ready to pass into [`AudioCapture::start_dual`],
-/// or `None` if nothing suitable was found.
-pub fn detect_system_audio_source() -> Option<String> {
-    let host = cpal::default_host();
+/// - Windows: the default output device via WASAPI loopback.
+/// - macOS: the default output device via a Core Audio process tap
+///   (cpal 0.18, macOS 14.2+), then an installed virtual driver
+///   (BlackHole / Soundflower / Loopback Audio / VB-Cable) as fallback.
+/// - Linux (PipeWire/PulseAudio host): every `*.monitor` input source.
+pub fn detect_system_audio_candidates() -> Vec<String> {
+    let host = best_host();
+    let mut out: Vec<String> = Vec::new();
 
-    #[cfg(target_os = "windows")]
-    {
-        use cpal::traits::DeviceTrait;
-        if let Some(dev) = host.default_output_device() {
-            if let Ok(name) = dev.name() {
-                return Some(format!("{}{}", LOOPBACK_PREFIX, name));
-            }
-        }
+    // Native loopback: tap the default output device.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if let Some(name) = host.default_output_device().as_ref().and_then(device_name) {
+        out.push(format!("{}{}", LOOPBACK_PREFIX, name));
     }
 
     let input_names: Vec<String> = host
         .input_devices()
-        .ok()?
-        .filter_map(|d| d.name().ok())
-        .collect();
+        .map(|devs| devs.filter_map(|d| device_name(&d)).collect())
+        .unwrap_or_default();
 
     #[cfg(target_os = "macos")]
     {
@@ -53,20 +76,18 @@ pub fn detect_system_audio_source() -> Option<String> {
                 .iter()
                 .find(|n| n.to_lowercase().contains(needle))
             {
-                return Some(n.clone());
+                out.push(n.clone());
             }
         }
     }
 
     #[cfg(target_os = "linux")]
-    {
-        if let Some(n) = input_names.iter().find(|n| n.ends_with(".monitor")) {
-            return Some(n.clone());
-        }
+    for n in input_names.iter().filter(|n| n.ends_with(".monitor")) {
+        out.push(n.clone());
     }
 
     let _ = input_names;
-    None
+    out
 }
 
 /// Splits enumerated sources into mic-style and loopback-style lists, with
@@ -74,17 +95,17 @@ pub fn detect_system_audio_source() -> Option<String> {
 /// The system-audio list also includes "(auto)" so the user can opt in to
 /// OS-appropriate auto-detection without knowing the exact device name.
 ///
-/// On Windows, output devices can be opened as input via WASAPI loopback.
-/// On macOS/Linux, loopback entries are enumerated too, but opening them
-/// will fail unless a virtual driver (e.g. BlackHole) is in use — in that
-/// case the virtual driver already appears as a regular input device.
+/// On Windows (WASAPI) and macOS 14.2+ (Core Audio process taps), output
+/// devices can be opened as loopback inputs directly. On Linux, loopback
+/// entries won't open — the PipeWire/PulseAudio `*.monitor` sources in the
+/// input list are the way to capture system audio there.
 pub fn list_devices_split() -> (Vec<String>, Vec<String>) {
     let mut mic = vec!["(none)".to_string(), "default".to_string()];
     let mut sys = vec!["(none)".to_string(), "(auto)".to_string()];
-    let host = cpal::default_host();
+    let host = best_host();
     if let Ok(devs) = host.input_devices() {
         for d in devs {
-            if let Ok(name) = d.name() {
+            if let Some(name) = device_name(&d) {
                 if !mic.iter().any(|n| n == &name) {
                     mic.push(name.clone());
                 }
@@ -99,7 +120,7 @@ pub fn list_devices_split() -> (Vec<String>, Vec<String>) {
     }
     if let Ok(devs) = host.output_devices() {
         for d in devs {
-            if let Ok(name) = d.name() {
+            if let Some(name) = device_name(&d) {
                 let labeled = format!("{}{}", LOOPBACK_PREFIX, name);
                 if !sys.iter().any(|n| n == &labeled) {
                     sys.push(labeled);
@@ -118,9 +139,8 @@ fn auto_detect_error_message() -> &'static str {
     }
     #[cfg(target_os = "macos")]
     {
-        "system-audio auto-detect failed: no virtual audio driver found. \
-         Install BlackHole (https://github.com/ExistentialAudio/BlackHole) \
-         and route system output through it, then retry."
+        "system-audio auto-detect failed: no default output device to tap \
+         and no virtual audio driver (e.g. BlackHole) installed."
     }
     #[cfg(target_os = "linux")]
     {
@@ -155,26 +175,25 @@ impl AudioCapture {
     ) -> Result<Self> {
         let primary_active = !matches!(primary, "" | "(none)");
 
-        // Resolve "(auto)" to a concrete device name now, so the rest of
-        // the function deals only with explicit names. A failed resolution
-        // produces an actionable error instead of silently disabling.
-        let resolved_secondary: Option<String> = match secondary {
-            Some(s) if s == "(auto)" || s == "auto" => match detect_system_audio_source() {
-                Some(name) => {
-                    info!(detected = %name, "auto-detected system-audio source");
-                    Some(name)
-                }
-                None => {
+        // Resolve "(auto)" into an ordered candidate list now; explicit
+        // names become a single-entry list. Candidates are tried at open
+        // time because the preferred native path can fail (permissions,
+        // macOS < 14.2) while a fallback still works.
+        let secondary_candidates: Vec<String> = match secondary {
+            Some(s) if s == "(auto)" || s == "auto" => {
+                let cands = detect_system_audio_candidates();
+                if cands.is_empty() {
                     return Err(anyhow!(auto_detect_error_message()));
                 }
-            },
-            Some(s) if !s.is_empty() && s != "(none)" => Some(s.to_string()),
-            _ => None,
+                info!(candidates = ?cands, "auto-detected system-audio candidates");
+                cands
+            }
+            Some(s) if !s.is_empty() && s != "(none)" => vec![s.to_string()],
+            _ => Vec::new(),
         };
-        let secondary_active = resolved_secondary.is_some();
 
         // Single-source fast path: no mixer, no extra buffer.
-        if !secondary_active {
+        if secondary_candidates.is_empty() {
             if !primary_active {
                 return Err(anyhow!("no audio source selected"));
             }
@@ -185,20 +204,19 @@ impl AudioCapture {
             });
         }
 
-        let secondary_name = resolved_secondary.unwrap();
-        let secondary_buf: Arc<Mutex<VecDeque<f32>>> =
-            Arc::new(Mutex::new(VecDeque::with_capacity(SECONDARY_CAP_SAMPLES)));
-
         // If the user only configured a secondary (uncommon), treat it as
         // the primary and skip the mixer — there is nothing to mix against.
         if !primary_active {
-            let (stream, name) = build_stream(&secondary_name, Sink::Direct(tx))?;
+            let (stream, name) =
+                build_secondary_stream(&secondary_candidates, Sink::Direct(tx))?;
             return Ok(Self {
                 _streams: vec![stream],
                 input_name: name,
             });
         }
 
+        let secondary_buf: Arc<Mutex<VecDeque<f32>>> =
+            Arc::new(Mutex::new(VecDeque::with_capacity(SECONDARY_CAP_SAMPLES)));
         let (primary_stream, primary_name) = build_stream(
             primary,
             Sink::Primary {
@@ -206,8 +224,8 @@ impl AudioCapture {
                 secondary: secondary_buf.clone(),
             },
         )?;
-        let (secondary_stream, secondary_label) = build_stream(
-            &secondary_name,
+        let (secondary_stream, secondary_label) = build_secondary_stream(
+            &secondary_candidates,
             Sink::Secondary {
                 buf: secondary_buf,
             },
@@ -221,6 +239,7 @@ impl AudioCapture {
 }
 
 /// What a `ProcState` does with each batch of 16 kHz mono samples it produces.
+#[derive(Clone)]
 enum Sink {
     /// Single-source mode: push directly to the consumer channel.
     Direct(Sender<Vec<f32>>),
@@ -268,25 +287,53 @@ impl Sink {
     }
 }
 
-fn build_stream(device_name: &str, sink: Sink) -> Result<(Stream, String)> {
-    let host = cpal::default_host();
-    let (device, is_loopback) = if let Some(name) = device_name.strip_prefix(LOOPBACK_PREFIX) {
+/// Try system-audio candidates in order until one opens.
+fn build_secondary_stream(candidates: &[String], sink: Sink) -> Result<(Stream, String)> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for cand in candidates {
+        match build_stream(cand, sink.clone()) {
+            Ok(ok) => {
+                if last_err.is_some() {
+                    info!(chosen = %cand, "system-audio fallback source opened");
+                }
+                return Ok(ok);
+            }
+            Err(e) => {
+                warn!(candidate = %cand, error = %e, "system-audio candidate failed to open");
+                last_err = Some(e);
+            }
+        }
+    }
+    let base = last_err.unwrap_or_else(|| anyhow!(auto_detect_error_message()));
+    if cfg!(target_os = "macos") {
+        Err(base.context(
+            "opening system audio failed — on macOS 14.2+ grant your terminal app \
+             permission under System Settings → Privacy & Security → Screen & \
+             System Audio Recording; on older macOS install BlackHole \
+             (https://github.com/ExistentialAudio/BlackHole)",
+        ))
+    } else {
+        Err(base)
+    }
+}
+
+fn build_stream(wanted: &str, sink: Sink) -> Result<(Stream, String)> {
+    let host = best_host();
+    let (device, is_loopback) = if let Some(name) = wanted.strip_prefix(LOOPBACK_PREFIX) {
         let dev = host
             .output_devices()?
-            .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+            .find(|d| device_name(d).is_some_and(|n| n == name))
             .ok_or_else(|| anyhow!("output device not found: {}", name))?;
-        if !cfg!(target_os = "windows") {
+        if cfg!(target_os = "linux") {
             warn!(
                 device = %name,
-                "loopback capture is only natively supported on Windows \
-                 (WASAPI). On macOS, install a virtual audio driver \
-                 (e.g. BlackHole) and select it as a regular input device. \
-                 On Linux (PulseAudio), select the *.monitor source from \
-                 the input list."
+                "loopback entries are not natively supported on Linux — \
+                 select the corresponding *.monitor source from the input \
+                 list instead."
             );
         }
         (dev, true)
-    } else if device_name == "default" {
+    } else if wanted == "default" {
         (
             host.default_input_device()
                 .ok_or_else(|| anyhow!("no default input device"))?,
@@ -295,8 +342,8 @@ fn build_stream(device_name: &str, sink: Sink) -> Result<(Stream, String)> {
     } else {
         let dev = host
             .input_devices()?
-            .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
-            .ok_or_else(|| anyhow!("input device not found: {}", device_name))?;
+            .find(|d| device_name(d).is_some_and(|n| n == wanted))
+            .ok_or_else(|| anyhow!("input device not found: {}", wanted))?;
         (dev, false)
     };
 
@@ -304,14 +351,11 @@ fn build_stream(device_name: &str, sink: Sink) -> Result<(Stream, String)> {
 }
 
 fn open_stream(device: Device, is_loopback: bool, sink: Sink) -> Result<(Stream, String)> {
+    let bare_name = device_name(&device).unwrap_or_else(|| "unknown".into());
     let input_name = if is_loopback {
-        format!(
-            "{}{}",
-            LOOPBACK_PREFIX,
-            device.name().unwrap_or_else(|_| "unknown".into())
-        )
+        format!("{}{}", LOOPBACK_PREFIX, bare_name)
     } else {
-        device.name().unwrap_or_else(|_| "unknown".into())
+        bare_name
     };
     let supported = if is_loopback {
         device
@@ -324,7 +368,7 @@ fn open_stream(device: Device, is_loopback: bool, sink: Sink) -> Result<(Stream,
     };
     let sample_format = supported.sample_format();
     let config: StreamConfig = supported.into();
-    let input_sr = config.sample_rate.0;
+    let input_sr = config.sample_rate;
     let input_channels = config.channels;
 
     info!(
@@ -342,7 +386,7 @@ fn open_stream(device: Device, is_loopback: bool, sink: Sink) -> Result<(Stream,
         SampleFormat::F32 => {
             let mut state = ProcState::new(input_channels as usize, input_sr, sink)?;
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[f32], _| state.push(data),
                 err_fn,
                 None,
@@ -351,7 +395,7 @@ fn open_stream(device: Device, is_loopback: bool, sink: Sink) -> Result<(Stream,
         SampleFormat::I16 => {
             let mut state = ProcState::new(input_channels as usize, input_sr, sink)?;
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[i16], _| {
                     let f: Vec<f32> = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
                     state.push(&f);
@@ -363,7 +407,7 @@ fn open_stream(device: Device, is_loopback: bool, sink: Sink) -> Result<(Stream,
         SampleFormat::U16 => {
             let mut state = ProcState::new(input_channels as usize, input_sr, sink)?;
             device.build_input_stream(
-                &config,
+                config,
                 move |data: &[u16], _| {
                     let f: Vec<f32> = data
                         .iter()
