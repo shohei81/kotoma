@@ -22,7 +22,8 @@ const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", 
     about = "Live bilingual voice transcription TUI",
     after_help = "Commands:\n  \
         update [standard|high|both]  Update the kotoma binary in place; pass a tier to also refetch that model preset\n  \
-        model <list|pull|use|preset|rm>  Manage local LLM models (run `kotoma model` to list)"
+        model <list|pull|use|preset|rm>  Manage local LLM models (run `kotoma model` to list)\n  \
+        devices  List audio sources (mic + system audio) without starting the TUI"
 )]
 struct Args {
     /// Output markdown file. Example: `kotoma notes.md`
@@ -51,6 +52,7 @@ struct Args {
 }
 
 const INSTALL_URL: &str = "https://raw.githubusercontent.com/shohei81/kotoma/main/install.sh";
+const INSTALL_PS1_URL: &str = "https://raw.githubusercontent.com/shohei81/kotoma/main/install.ps1";
 
 fn main() -> Result<()> {
     // `kotoma update [tier]` self-updates by re-running install.sh. Handle it
@@ -61,6 +63,9 @@ fn main() -> Result<()> {
     }
     if raw.get(1).map(String::as_str) == Some("model") {
         return model::run(&raw[2..]);
+    }
+    if raw.get(1).map(String::as_str) == Some("devices") {
+        return run_devices();
     }
 
     let args = Args::parse();
@@ -111,33 +116,73 @@ fn run_update(tier: Option<&str>) -> Result<()> {
     };
 
     // Match the binary we're replacing: a cargo-installed kotoma lives under
-    // ~/.cargo/bin, so build from source to update it in place; a prebuilt
-    // binary (~/.local/bin) takes install.sh's default download path.
+    // ~/.cargo/bin (or \.cargo\ on Windows), so build from source to update
+    // it in place; a prebuilt binary takes the default download path.
     let from_source = std::env::current_exe()
         .ok()
-        .and_then(|p| p.to_str().map(|s| s.contains("/.cargo/")))
+        .and_then(|p| {
+            p.to_str()
+                .map(|s| s.contains("/.cargo/") || s.contains("\\.cargo\\"))
+        })
         .unwrap_or(false);
-
-    let mut script = format!("curl -fsSL '{INSTALL_URL}' | bash -s --");
-    if let Some(t) = tier {
-        script.push(' ');
-        script.push_str(t);
-    }
-    if from_source {
-        script.push_str(" --from-source");
-    }
 
     println!(
         "==> Updating kotoma binary{}{}",
         tier.map(|t| format!(" (+ {t} models)")).unwrap_or_default(),
         if from_source { ", from source" } else { "" }
     );
-    let status = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(&script)
-        .status()?;
+
+    let status = if cfg!(windows) {
+        let mut script =
+            format!("& ([scriptblock]::Create((irm -useb '{INSTALL_PS1_URL}')))");
+        if let Some(t) = tier {
+            script.push_str(&format!(" -Tier {t}"));
+        }
+        if from_source {
+            script.push_str(" -FromSource");
+        }
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+            .status()?
+    } else {
+        let mut script = format!("curl -fsSL '{INSTALL_URL}' | bash -s --");
+        if let Some(t) = tier {
+            script.push(' ');
+            script.push_str(t);
+        }
+        if from_source {
+            script.push_str(" --from-source");
+        }
+        std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&script)
+            .status()?
+    };
     if !status.success() {
-        bail!("update failed (install.sh exited with {status})");
+        bail!("update failed (install script exited with {status})");
+    }
+    Ok(())
+}
+
+/// Print enumerated audio sources without starting the TUI — for writing
+/// config files and for cross-platform bug reports.
+fn run_devices() -> Result<()> {
+    println!("Microphone sources:");
+    let (mic, sys) = audio::list_devices_split();
+    for m in &mic {
+        println!("  {m}");
+    }
+    println!("\nSystem-audio sources:");
+    for s in &sys {
+        println!("  {s}");
+    }
+    println!("\nSystem-audio auto-detect candidates (tried in order):");
+    let cands = audio::detect_system_audio_candidates();
+    if cands.is_empty() {
+        println!("  (none found)");
+    }
+    for c in &cands {
+        println!("  {c}");
     }
     Ok(())
 }
