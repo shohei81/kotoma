@@ -12,6 +12,23 @@ use webrtc_vad::{SampleRate as VadSr, Vad, VadMode};
 const FRAME_MS: u32 = 30;
 pub const FRAME_SAMPLES: usize = (TARGET_SR as usize * FRAME_MS as usize) / 1000; // 480
 
+/// Speech/non-speech decision per 30 ms frame. Injectable so the segmenting
+/// state machine can be unit-tested with a scripted detector (webrtc-vad
+/// needs real speech audio, which synthetic test signals can't provide).
+trait SpeechDetector {
+    fn is_speech(&mut self, frame_i16: &[i16]) -> bool;
+}
+
+struct WebRtcDetector {
+    vad: Vad,
+}
+
+impl SpeechDetector for WebRtcDetector {
+    fn is_speech(&mut self, frame_i16: &[i16]) -> bool {
+        self.vad.is_voice_segment(frame_i16).unwrap_or(false)
+    }
+}
+
 pub struct VadRunner {
     aggressiveness: u8,
     min_speech_ms: u32,
@@ -43,8 +60,19 @@ impl VadRunner {
             2 => VadMode::Aggressive,
             _ => VadMode::VeryAggressive,
         };
-        let mut vad = Vad::new_with_rate_and_mode(VadSr::Rate16kHz, mode);
+        let vad = Vad::new_with_rate_and_mode(VadSr::Rate16kHz, mode);
+        self.run_with_detector(WebRtcDetector { vad }, audio_rx, seg_tx, level_tx, draft_tx, paused)
+    }
 
+    fn run_with_detector(
+        &self,
+        mut detector: impl SpeechDetector,
+        audio_rx: Receiver<Vec<f32>>,
+        seg_tx: Sender<Segment>,
+        level_tx: Sender<f32>,
+        draft_tx: Sender<DraftState>,
+        paused: Arc<AtomicBool>,
+    ) -> Result<()> {
         let mut leftover: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES * 4);
         let mut segment: Vec<f32> = Vec::new();
         let mut in_speech = false;
@@ -84,7 +112,7 @@ impl VadRunner {
                 let rms = (frame_f.iter().map(|s| s * s).sum::<f32>() / frame_f.len() as f32).sqrt();
                 let _ = level_tx.try_send(rms);
 
-                let is_speech = vad.is_voice_segment(&frame_i16).unwrap_or(false);
+                let is_speech = detector.is_speech(&frame_i16);
 
                 if is_speech {
                     if !in_speech {
@@ -169,5 +197,103 @@ impl VadRunner {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::{bounded, unbounded};
+
+    /// Plays back a fixed per-frame speech/non-speech script; false once
+    /// the script runs out.
+    struct Scripted {
+        script: Vec<bool>,
+        i: usize,
+    }
+
+    impl SpeechDetector for Scripted {
+        fn is_speech(&mut self, _frame: &[i16]) -> bool {
+            let v = self.script.get(self.i).copied().unwrap_or(false);
+            self.i += 1;
+            v
+        }
+    }
+
+    /// Runs the segmenter over `script.len()` frames of audio with the given
+    /// per-frame speech script and returns the flushed segments.
+    fn run_segmenter(runner: &VadRunner, script: Vec<bool>, paused: bool) -> Vec<Segment> {
+        let (audio_tx, audio_rx) = unbounded::<Vec<f32>>();
+        let (seg_tx, seg_rx) = bounded::<Segment>(64);
+        let (level_tx, _level_rx) = unbounded::<f32>();
+        let (draft_tx, _draft_rx) = unbounded::<DraftState>();
+
+        audio_tx
+            .send(vec![0.1f32; FRAME_SAMPLES * script.len()])
+            .unwrap();
+        drop(audio_tx); // close the channel so run_with_detector returns
+
+        runner
+            .run_with_detector(
+                Scripted { script, i: 0 },
+                audio_rx,
+                seg_tx,
+                level_tx,
+                draft_tx,
+                Arc::new(AtomicBool::new(paused)),
+            )
+            .unwrap();
+        seg_rx.try_iter().collect()
+    }
+
+    /// min_speech = 3 frames, silence flush = 2 frames, max segment = 10 frames.
+    fn test_runner() -> VadRunner {
+        VadRunner::new(2, 3 * FRAME_MS, 2 * FRAME_MS, 10 * FRAME_MS)
+    }
+
+    #[test]
+    fn short_burst_below_min_speech_is_discarded() {
+        let mut script = vec![true, true]; // 2 < 3 min_speech frames
+        script.extend([false; 4]);
+        let segs = run_segmenter(&test_runner(), script, false);
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn speech_then_silence_flushes_one_segment() {
+        let mut script = vec![true; 5];
+        script.extend([false; 4]);
+        let segs = run_segmenter(&test_runner(), script, false);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].speech_ms, 5 * FRAME_MS);
+        // Segment includes the trailing silence frames buffered before flush.
+        assert_eq!(segs[0].samples.len(), 7 * FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn long_speech_is_force_flushed_at_max_segment() {
+        // 12 frames of continuous speech with a 10-frame cap: force flush at
+        // 10, and the 2-frame tail (below min_speech) never flushes.
+        let segs = run_segmenter(&test_runner(), vec![true; 12], false);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].speech_ms, 10 * FRAME_MS);
+        assert_eq!(segs[0].samples.len(), 10 * FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn two_utterances_produce_two_segments() {
+        let mut script = vec![true; 4];
+        script.extend([false; 3]);
+        script.extend([true; 4]);
+        script.extend([false; 3]);
+        let segs = run_segmenter(&test_runner(), script, false);
+        assert_eq!(segs.len(), 2);
+        assert!(segs[1].id > segs[0].id);
+    }
+
+    #[test]
+    fn paused_discards_everything() {
+        let segs = run_segmenter(&test_runner(), vec![true; 12], true);
+        assert!(segs.is_empty());
     }
 }
