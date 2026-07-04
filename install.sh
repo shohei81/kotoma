@@ -39,17 +39,28 @@ done
 
 if ! command -v llama-server >/dev/null 2>&1; then
     echo "NOTE: llama-server not found on PATH — translation will be disabled."
-    echo "      Install with: brew install llama.cpp"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "      Install with: brew install llama.cpp"
+    else
+        echo "      Install llama.cpp via your package manager, or grab a release"
+        echo "      from https://github.com/ggml-org/llama.cpp/releases"
+    fi
 fi
 
 CONFIG_DIR="$HOME/.config/kotoma"
 INSTALLED_BIN=""
 
-# Prebuilt binary (Apple Silicon macOS only, no Rust toolchain needed).
-# Falls back to cargo when unavailable.
+# Prebuilt binary (Apple Silicon macOS / x86_64 Linux, no Rust toolchain
+# needed). Falls back to cargo when unavailable. Windows users: use
+# install.ps1 instead.
 try_binary_install() {
-    [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || return 1
-    local url="${REPO_URL}/releases/latest/download/kotoma-aarch64-apple-darwin.tar.gz"
+    local asset
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64) asset="kotoma-aarch64-apple-darwin.tar.gz" ;;
+        Linux-x86_64) asset="kotoma-x86_64-unknown-linux-gnu.tar.gz" ;;
+        *) return 1 ;;
+    esac
+    local url="${REPO_URL}/releases/latest/download/${asset}"
     local tmp
     tmp=$(mktemp -d)
     curl -fsSL "$url" -o "$tmp/kotoma.tar.gz" || { rm -rf "$tmp"; return 1; }
