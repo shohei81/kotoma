@@ -8,8 +8,8 @@ case "$TIER" in
     ""|standard|high|both) ;;
     *)
         echo "usage: $0 [standard|high|both]" >&2
-        echo "  standard  Whisper small + Gemma 3 4B" >&2
-        echo "  high      Whisper large-v3-turbo + Gemma 3 12B" >&2
+        echo "  standard  Whisper small + Gemma 4 E4B" >&2
+        echo "  high      Whisper large-v3-turbo + Gemma 4 12B" >&2
         echo "  both      both presets (selects high)" >&2
         echo "  (omit)    binary only — set up models later with 'kotoma model'" >&2
         exit 1

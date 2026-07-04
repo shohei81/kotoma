@@ -172,7 +172,7 @@ cargo run --release -- notes.md
 
 | Key           | Action                          |
 |---------------|---------------------------------|
-| `q` / `Ctrl+C`| Save transcript and quit (add `--summary`, or `summarize = true` in `[translator]`, to also write `### 要約` + `### Summary` sections) |
+| `q` / `Ctrl+C`| Save transcript and quit          |
 | `s`           | Save transcript now             |
 | `l`           | Cycle Whisper language (en → ja → auto) |
 | `space`       | Pause / resume UI               |
@@ -249,10 +249,11 @@ Platform support for system-audio capture:
 
 On a 32 GB M4 MacBook Air with the recommended stack:
 - Whisper large-v3-turbo: transcribes faster than realtime on Metal
-- Gemma 3 12B Q4_K_M: ~20–30 tok/s, with prompt caching across segments
-- Peak RSS: ~10 GB; the standard tier stays around ~4 GB
+- Gemma 4 12B Q4_K_M: ~20–30 tok/s, with prompt caching across segments
+- Peak RSS: ~10 GB; the standard tier stays around ~6 GB
 
-For lighter setups: use `ggml-small.bin` + gemma-3-4b-it-Q4_K_M.
+For lighter setups: use the standard preset (`ggml-small.bin` +
+`gemma-4-E4B-it-Q4_K_M.gguf`).
 
 Whisper runs with flash attention on Metal (faster, cooler, no quality cost).
 If the machine still runs hot during long transcription, switch to a quantized

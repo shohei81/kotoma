@@ -39,11 +39,8 @@ max_segment_ms = 15000
 # Remove or comment out this section to disable translation.
 [translator]
 binary = "llama-server"
-model_path = "models/gemma-3-4b-it-Q4_K_M.gguf"
+model_path = "models/gemma-4-E4B-it-Q4_K_M.gguf"
 port = 8787
 n_ctx = 8192
 max_new_tokens = 512
 startup_timeout_secs = 120
-
-# Generate 要約/Summary sections on quit (off by default; or run `kotoma --summary`).
-# summarize = true

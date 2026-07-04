@@ -17,8 +17,8 @@ Installs/updates the kotoma binary. The local LLM models are a separate
 dependency — pass a preset to also fetch its models, or omit it to install
 the binary only and follow the model guidance printed at the end.
 
-  standard         Whisper small + Gemma 3 4B   (~3 GB disk, ~4 GB RAM)
-  high             Whisper large-v3-turbo + Gemma 3 12B   (~9 GB disk, ~10 GB RAM)
+  standard         Whisper small + Gemma 4 E4B   (~6 GB disk, ~8 GB RAM)
+  high             Whisper large-v3-turbo + Gemma 4 12B   (~9 GB disk, ~12 GB RAM)
   both             Both presets (selects high; switch with 'kotoma model use')
   --from-source    Skip the prebuilt binary and build with cargo
 
