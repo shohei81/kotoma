@@ -21,7 +21,7 @@ const ALLOWED_OUTPUT_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", 
     version,
     about = "Live bilingual voice transcription TUI",
     after_help = "Commands:\n  \
-        update [standard|high]  Update the kotoma binary in place; pass a tier to also refetch that model preset\n  \
+        update [standard|high|both]  Update the kotoma binary in place; pass a tier to also refetch that model preset\n  \
         model <list|pull|use|preset|rm>  Manage local LLM models (run `kotoma model` to list)"
 )]
 struct Args {
@@ -105,8 +105,8 @@ fn main() -> Result<()> {
 /// want to (re)fetch that preset's models.
 fn run_update(tier: Option<&str>) -> Result<()> {
     let tier = match tier {
-        Some(t @ ("standard" | "high")) => Some(t),
-        Some(other) => bail!("unknown tier '{other}' (expected: standard | high)"),
+        Some(t @ ("standard" | "high" | "both")) => Some(t),
+        Some(other) => bail!("unknown tier '{other}' (expected: standard | high | both)"),
         None => None,
     };
 

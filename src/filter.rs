@@ -300,10 +300,11 @@ fn is_only_brackets(s: &str) -> bool {
     if t.is_empty() {
         return true;
     }
+    // Only annotation-style brackets count: 「」 are quotation marks, so a
+    // fully-quoted line is real speech, not a noise caption.
     let wrapped = (t.starts_with('[') && t.ends_with(']'))
         || (t.starts_with('(') && t.ends_with(')'))
-        || (t.starts_with('《') && t.ends_with('》'))
-        || (t.starts_with('「') && t.ends_with('」'));
+        || (t.starts_with('《') && t.ends_with('》'));
     if !wrapped {
         return false;
     }
@@ -355,6 +356,14 @@ mod tests {
     #[test]
     fn drops_bracket_only_nonlatin() {
         assert_eq!(clean("《Soucaity Astrolabe》"), None);
+    }
+
+    #[test]
+    fn keeps_fully_quoted_speech() {
+        assert_eq!(
+            clean("「こんにちは、元気ですか」").as_deref(),
+            Some("「こんにちは、元気ですか」")
+        );
     }
 
     #[test]

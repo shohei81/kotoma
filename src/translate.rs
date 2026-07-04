@@ -175,6 +175,9 @@ fn run(
                         context.push(&line.src_lang, &line.text, &translated);
                     }
                     let _ = ui_tx.send(UiMsg::TranslationReady { id, translated });
+                    // The server is demonstrably healthy again — only an
+                    // uninterrupted crash loop should exhaust the budget.
+                    restarts = 0;
                 }
                 Ok(_) => {
                     debug!(id, "empty translation");

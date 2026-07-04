@@ -235,21 +235,23 @@ enum Sink {
 }
 
 impl Sink {
-    fn emit(&self, mut chunk: Vec<f32>) {
+    /// Returns true if the chunk was dropped because the consumer channel is
+    /// full (the pipeline is backed up).
+    fn emit(&self, mut chunk: Vec<f32>) -> bool {
         match self {
-            Sink::Direct(tx) => {
-                let _ = tx.try_send(chunk);
-            }
+            Sink::Direct(tx) => tx.try_send(chunk).is_err(),
             Sink::Primary { tx, secondary } => {
                 if let Ok(mut buf) = secondary.lock() {
                     for sample in chunk.iter_mut() {
                         if let Some(s) = buf.pop_front() {
-                            *sample += s;
+                            // Clamp the sum: two hot sources can exceed ±1.0
+                            // and feed clipped garbage into whisper.
+                            *sample = (*sample + s).clamp(-1.0, 1.0);
                         }
                         // else: secondary is dry — leave primary sample as-is.
                     }
                 }
-                let _ = tx.try_send(chunk);
+                tx.try_send(chunk).is_err()
             }
             Sink::Secondary { buf } => {
                 if let Ok(mut buf) = buf.lock() {
@@ -260,6 +262,7 @@ impl Sink {
                         buf.pop_front();
                     }
                 }
+                false
             }
         }
     }
@@ -384,6 +387,8 @@ struct ProcState {
     mono_buf: Vec<f32>,
     resampler: Option<FftFixedInOut<f32>>,
     sink: Sink,
+    /// Chunks silently discarded because the consumer channel was full.
+    dropped_chunks: u32,
 }
 
 impl ProcState {
@@ -403,7 +408,21 @@ impl ProcState {
             mono_buf: Vec::with_capacity(8192),
             resampler,
             sink,
+            dropped_chunks: 0,
         })
+    }
+
+    /// Record dropped chunks and warn, rate-limited so a stalled pipeline
+    /// doesn't flood the log.
+    fn note_dropped(&mut self, n: u32) {
+        let before = self.dropped_chunks;
+        self.dropped_chunks += n;
+        if before == 0 || self.dropped_chunks / 100 > before / 100 {
+            warn!(
+                dropped = self.dropped_chunks,
+                "audio chunks dropped — pipeline backed up"
+            );
+        }
     }
 
     fn push(&mut self, data: &[f32]) {
@@ -416,6 +435,7 @@ impl ProcState {
             }
         }
 
+        let mut newly_dropped = 0u32;
         if let Some(resampler) = self.resampler.as_mut() {
             let in_size = resampler.input_frames_next();
             while self.mono_buf.len() >= in_size {
@@ -423,8 +443,8 @@ impl ProcState {
                 match resampler.process(&[input], None) {
                     Ok(mut out) => {
                         if let Some(first) = out.pop() {
-                            if !first.is_empty() {
-                                self.sink.emit(first);
+                            if !first.is_empty() && self.sink.emit(first) {
+                                newly_dropped += 1;
                             }
                         }
                     }
@@ -433,7 +453,12 @@ impl ProcState {
             }
         } else if !self.mono_buf.is_empty() {
             let chunk: Vec<f32> = std::mem::take(&mut self.mono_buf);
-            self.sink.emit(chunk);
+            if self.sink.emit(chunk) {
+                newly_dropped += 1;
+            }
+        }
+        if newly_dropped > 0 {
+            self.note_dropped(newly_dropped);
         }
     }
 }

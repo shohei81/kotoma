@@ -24,6 +24,11 @@ pub struct DraftState {
     pub elapsed_ms: u32,
 }
 
+/// Binary classifier for column/translation-direction routing: "en" vs "ja"
+/// (there is no third bucket). Hangul deliberately maps to "ja": it only shows
+/// up as a whisper hallucination, and routing it down the ja → en path — where
+/// translate.rs's Hangul-leak guard rejects it — is the least harmful choice
+/// (treating it as "en" would poison the en → ja context history instead).
 pub fn detect_lang(text: &str) -> &'static str {
     let has_cjk = text.chars().any(|c| {
         let n = c as u32;
