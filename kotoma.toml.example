@@ -29,9 +29,10 @@ input_device = "default"
 threads = 4
 
 # Restrict whisper's encoder to each segment's actual length instead of the
-# fixed 30 s window — much less compute/heat on short utterances. Set false
-# if you suspect it hurts accuracy.
-# dynamic_audio_ctx = true
+# fixed 30 s window — less compute/heat on short utterances, but it degrades
+# transcription accuracy noticeably (whisper's encoder assumes the full
+# window), so it's off by default. Enable only if you accept that trade-off.
+# dynamic_audio_ctx = false
 
 # Segments that don't end a sentence merge with the next one (same language,
 # pause below this many ms) into one line, and the full sentence is

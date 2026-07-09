@@ -19,9 +19,11 @@ pub struct Config {
     #[serde(default = "default_threads")]
     pub threads: i32,
     /// Restrict whisper's encoder window to each segment's actual length
-    /// instead of the fixed 30 s — a large speed/power win on short
-    /// segments. Set false if you suspect it hurts accuracy.
-    #[serde(default = "default_true")]
+    /// instead of the fixed 30 s. Off by default: whisper's encoder
+    /// positional embeddings assume the full 1500-frame window, so shrinking
+    /// `audio_ctx` degrades accuracy badly — even well above the old 384
+    /// floor. Enable only if you accept a quality hit for the power savings.
+    #[serde(default)]
     pub dynamic_audio_ctx: bool,
     /// Largest pause (ms) between segments that still merges them into one
     /// sentence-shaped line for display and translation. 0 disables merging.
@@ -85,9 +87,6 @@ fn default_device() -> String {
 }
 fn default_threads() -> i32 {
     4
-}
-fn default_true() -> bool {
-    true
 }
 fn default_merge_gap() -> u32 {
     2000
